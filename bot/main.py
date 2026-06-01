@@ -130,6 +130,27 @@ def calc_bb(s, w=20, n=2):
     std = s.rolling(w).std()
     return m, m+n*std, m-n*std
 
+def calc_sr_levels(df, lookback=50):
+    highs = df['high'].tail(lookback)
+    lows = df['low'].tail(lookback)
+    levels = []
+    for i in range(2, len(highs)-2):
+        if highs.iloc[i] > highs.iloc[i-1] and highs.iloc[i] > highs.iloc[i+1] and \
+           highs.iloc[i] > highs.iloc[i-2] and highs.iloc[i] > highs.iloc[i+2]:
+            levels.append(float(highs.iloc[i]))
+        if lows.iloc[i] < lows.iloc[i-1] and lows.iloc[i] < lows.iloc[i+1] and \
+           lows.iloc[i] < lows.iloc[i-2] and lows.iloc[i] < lows.iloc[i+2]:
+            levels.append(float(lows.iloc[i]))
+    return sorted(set([round(l, 1) for l in levels]))
+
+def get_nearest_sr(price, levels, atr):
+    if not levels: return None, None, 0
+    nearest = min(levels, key=lambda x: abs(x - price))
+    dist = abs(nearest - price)
+    bonus = max(0, int((1 - dist/(atr*2)) * 15)) if dist < atr*2 else 0
+    above = nearest > price
+    return nearest, above, bonus
+
 def calc_hurst(s, max_lag=30):
     prices = np.array(s.dropna())
     if len(prices) < max_lag+5: return 0.5
@@ -284,6 +305,13 @@ def score_signal(direction, df, mtf_str, regime):
     elif "trending_bear" in regime and direction=="sell": score+=5; reasons.append("Regime bear +5")
     elif regime=="ranging": score-=8; reasons.append("Ranging -8")
 
+    levels = calc_sr_levels(df)
+    sr_level, sr_above, sr_bonus = get_nearest_sr(float(last.close), levels, float(last.atr))
+    if sr_bonus > 0:
+        if direction=="buy" and not sr_above:
+            score += sr_bonus; reasons.append(f"Near support +{sr_bonus}")
+        elif direction=="sell" and sr_above:
+            score += sr_bonus; reasons.append(f"Near resistance +{sr_bonus}")
     return max(0,min(100,score)), reasons
 
 def generate_signal(tf_data):
