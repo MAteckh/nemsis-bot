@@ -689,9 +689,38 @@ def run_market_analysis(tf_data=None):
     analysis = run_ai_analysis(headlines, tf_data)
     
     if analysis is None:
-        analysis = {"verdict": "NEUTRAL", "confidence": 50,
-                    "summary": "AI analysis unavailable — set CLAUDE_KEY in Railway Variables.",
-                    "key_factor": "No API key", "bull_pct": 50, "bear_pct": 50, "heatmap_data": {}}
+    # Build heatmap even without AI
+     heatmap = {}
+    if tf_data:
+        for tf, df in tf_data.items():
+            if df is None or len(df) < 50: continue
+            d = add_indicators(df)
+            last = d.iloc[-1]
+            rsi = float(last.rsi)
+            macd = float(last.macd)
+            msig = float(last.macd_sig)
+            ema20 = float(last.ema20)
+            ema50 = float(last.ema50)
+            adx = float(last.adx)
+            stoch = float(last.stoch_k) if "stoch_k" in d.columns else 50.0
+            bb_pos = float((last.close - last.bb_lo) / (last.bb_up - last.bb_lo + 0.001) * 100)
+            def cc(v, t):
+                if t=="rsi": return "sb" if v<35 else "b" if v<45 else "sbr" if v>65 else "br" if v>55 else "n"
+                if t=="bool": return "b" if v else "br"
+                if t=="adx": return "sb" if v>35 else "b" if v>22 else "n"
+                if t=="bb": return "b" if v<20 else "br" if v>80 else "n"
+                if t=="stoch": return "b" if v<25 else "br" if v>75 else "n"
+                return "n"
+            heatmap[tf] = {"RSI": cc(rsi,"rsi"), "MACD": cc(macd>msig,"bool"), "EMA": cc(ema20>ema50,"bool"), "ADX": cc(adx,"adx"), "BB": cc(bb_pos,"bb"), "STOCH": cc(stoch,"stoch")}
+    bull_c = sum(1 for tf in heatmap.values() for v in tf.values() if v in ("sb","b"))
+    bear_c = sum(1 for tf in heatmap.values() for v in tf.values() if v in ("sbr","br"))
+    total = bull_c + bear_c + 1
+    analysis = {"verdict": "NEUTRAL", "confidence": 50,
+                "summary": "AI analysis unavailable — set CLAUDE_KEY in Railway Variables.",
+                "key_factor": "No API key",
+                "bull_pct": round(bull_c/total*100),
+                "bear_pct": round(bear_c/total*100),
+                "heatmap_data": heatmap}
     
     sb_upsert("market_analysis", {
         "id":           1,
