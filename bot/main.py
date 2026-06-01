@@ -148,7 +148,7 @@ def add_indicators(df):
     df["atr"]    = calc_atr(df)
     df["adx"],df["pdi"],df["mdi"] = calc_adx(df)
     df["bb_mid"],df["bb_up"],df["bb_lo"] = calc_bb(df.close)
-    k = df.close.rolling(14).apply(lambda x:(x[-1]-x.min())/(x.max()-x.min()+1e-10)*100)
+    k = df['close'].rolling(14).apply(lambda x:(x.iloc[-1]-x.min())/(x.max()-x.min()+1e-10)*100, raw=False)
     df["stoch_k"] = k.rolling(3).mean()
     df["stoch_d"] = df["stoch_k"].rolling(3).mean()
     return df
