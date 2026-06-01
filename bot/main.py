@@ -212,7 +212,7 @@ def get_price():
 # ─────────────────────────────────────────────────────────
 
 TF_WEIGHTS = {"15m":0.10,"30m":0.20,"1h":0.30,"4h":0.40}
-MIN_SCORE  = 62
+MIN_SCORE  = 55
 ATR_SL     = 1.3
 ATR_TP     = 2.6
 
@@ -245,8 +245,8 @@ def get_mtf_bias(tf_data):
         total_w+=w
     if total_w==0: return "neutral",0,detail
     bn,brn = bull_w/total_w, bear_w/total_w
-    if bn>=0.6: return "buy",bn,detail
-    if brn>=0.6: return "sell",brn,detail
+    if bn>=0.5: return "buy",bn,detail
+    if brn>=0.5: return "sell",brn,detail
     return "neutral",max(bn,brn),detail
 
 def score_signal(direction, df, mtf_str, regime):
@@ -310,8 +310,8 @@ def generate_signal(tf_data):
 
     last = df.iloc[-1]
     rsi = last.rsi
-    if bias=="buy" and rsi>65: add_log(f"— No signal: RSI {rsi:.1f} too high"); return None
-    if bias=="sell" and rsi<35: add_log(f"— No signal: RSI {rsi:.1f} too low"); return None
+    if bias=="buy" and rsi>72: add_log(f"— No signal: RSI {rsi:.1f} too high"); return None
+    if bias=="sell" and rsi<28: add_log(f"— No signal: RSI {rsi:.1f} too low"); return None
 
     score, reasons = score_signal(bias, df, mtf_str, regime)
     if score < MIN_SCORE:
