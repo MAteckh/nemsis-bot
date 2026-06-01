@@ -172,8 +172,43 @@ def add_indicators(df):
     k = df['close'].rolling(14).apply(lambda x:(x.iloc[-1]-x.min())/(x.max()-x.min()+1e-10)*100, raw=False)
     df["stoch_k"] = k.rolling(3).mean()
     df["stoch_d"] = df["stoch_k"].rolling(3).mean()
+    df["vol_ma"] = df["volume"].rolling(20).mean()
+    df["vol_ratio"] = df["volume"] / (df["vol_ma"] + 1e-10)
     return df
+def detect_candle_pattern(df):
+    if len(df) < 3: return None, 0
+    c = df.iloc[-1]
+    p = df.iloc[-2]
+    pp = df.iloc[-3]
+    body = abs(c.close - c.open)
+    full = c.high - c.low + 1e-10
+    upper_wick = c.high - max(c.close, c.open)
+    lower_wick = min(c.close, c.open) - c.low
+    body_ratio = body / full
 
+    # Bullish engulfing
+    if c.close > c.open and p.close < p.open:
+        if c.open < p.close and c.close > p.open:
+            return "bullish_engulfing", 15
+
+    # Bearish engulfing
+    if c.close < c.open and p.close > p.open:
+        if c.open > p.close and c.close < p.open:
+            return "bearish_engulfing", 15
+
+    # Bullish pin bar
+    if lower_wick > body * 2 and lower_wick > upper_wick * 2 and body_ratio < 0.4:
+        return "bullish_pinbar", 12
+
+    # Bearish pin bar
+    if upper_wick > body * 2 and upper_wick > lower_wick * 2 and body_ratio < 0.4:
+        return "bearish_pinbar", 12
+
+    # Inside bar breakout
+    if c.high < p.high and c.low > p.low:
+        return "inside_bar", 5
+
+    return None, 0
 def get_regime(df):
     h = calc_hurst(df.close.tail(60))
     adx = df.adx.iloc[-1] if "adx" in df.columns else 20
@@ -297,7 +332,22 @@ def score_signal(direction, df, mtf_str, regime):
         elif sk>60: score+=5; reasons.append("StochRSI high +5")
         if c>bbu: score+=10; reasons.append("Above BB upper +10")
         elif c>last.bb_mid: score+=5; reasons.append("Above BB mid +5")
-
+    
+    vol_ratio = float(last.vol_ratio) if "vol_ratio" in df.columns else 1.0
+    if vol_ratio > 1.5:
+        score += 10; reasons.append(f"High volume +10")
+    elif vol_ratio > 1.2:
+        score += 5; reasons.append(f"Above avg volume +5")
+    elif vol_ratio < 0.7:
+        score -= 5; reasons.append(f"Low volume -5")
+    pattern, pat_bonus = detect_candle_pattern(df)
+    if pattern and pat_bonus > 0:
+        if direction=="buy" and "bullish" in pattern:
+            score += pat_bonus; reasons.append(f"{pattern} +{pat_bonus}")
+        elif direction=="sell" and "bearish" in pattern:
+            score += pat_bonus; reasons.append(f"{pattern} +{pat_bonus}")
+        elif pattern == "inside_bar":
+            score += pat_bonus; reasons.append(f"inside_bar +{pat_bonus}")
     if adx>22:
         p=min(int((adx-22)/30*15),15); score+=p; reasons.append(f"ADX {adx:.1f} +{p}")
 
