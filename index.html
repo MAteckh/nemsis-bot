@@ -41,7 +41,7 @@ body::before{content:'';position:fixed;inset:0;
 .card{background:var(--card);border:1px solid var(--border);border-radius:6px;padding:14px;
   box-shadow:0 0 20px rgba(255,0,0,0.08),inset 0 1px 0 rgba(255,50,50,0.15)}
 
-.card-title{font-size:9px;letter-spacing:4px;color:var(--red);text-transform:uppercase;
+.card-title{font-size:12px;letter-spacing:4px;color:var(--red);text-transform:uppercase;
   margin-bottom:14px;display:flex;align-items:center;gap:8px;
   text-shadow:0 0 10px rgba(255,0,0,.6)}
 .card-title::before{content:'▶';color:var(--red)}
@@ -64,7 +64,7 @@ body::before{content:'';position:fixed;inset:0;
 .sig-inner{padding-left:14px;border-left:3px solid}
 .sig-inner.buy{border-color:var(--green)}
 .sig-inner.sell{border-color:var(--red)}
-.sig-meta{font-size:9px;color:var(--red2);margin:4px 0 10px;letter-spacing:2px}
+.sig-meta{font-size:12px;color:var(--red2);margin:4px 0 10px;letter-spacing:2px}
 
 .score-row{display:flex;align-items:center;gap:10px;margin:10px 0}
 .score-num{font-size:28px;font-weight:700;color:var(--red);min-width:55px;
@@ -76,19 +76,19 @@ body::before{content:'';position:fixed;inset:0;
 
 .levels{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin:12px 0}
 .lev{background:#0d0000;border:1px solid var(--border);border-radius:4px;padding:10px;text-align:center}
-.lev .lt{font-size:7px;color:var(--red2);letter-spacing:3px;margin-bottom:4px}
+.lev .lt{font-size:11px;color:var(--red2);letter-spacing:3px;margin-bottom:4px}
 .lev .lv{font-size:16px;font-weight:700}
 .lev.en .lv{color:#ffffff}
 .lev.tp .lv{color:var(--green);text-shadow:0 0 8px rgba(0,255,136,.4)}
 .lev.sl .lv{color:var(--red);text-shadow:0 0 8px rgba(255,0,0,.4)}
 
 .tags{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:10px}
-.tag{background:#0d0000;border:1px solid var(--border);border-radius:3px;padding:4px 9px;font-size:10px;color:var(--red2)}
+.tag{background:#0d0000;border:1px solid var(--border);border-radius:3px;padding:4px 9px;font-size:12px;color:var(--red2)}
 .tag b{color:#ffffff}
 
 .mtf-row{display:grid;grid-template-columns:repeat(4,1fr);gap:5px}
 .mtf-cell{background:#0d0000;border:1px solid var(--border);border-radius:4px;padding:8px;text-align:center}
-.mtf-cell .mt{font-size:8px;color:var(--red2);letter-spacing:1px}
+.mtf-cell .mt{font-size:11px;color:var(--red2);letter-spacing:1px}
 .mtf-cell .md{font-size:15px;margin-top:3px;color:#ffffff}
 .mtf-cell.bull{border-color:rgba(0,255,136,.5);background:rgba(0,255,136,.06)}
 .mtf-cell.bull .md{color:var(--green)}
@@ -97,10 +97,10 @@ body::before{content:'';position:fixed;inset:0;
 
 /* HEATMAP */
 .hm-header{display:grid;grid-template-columns:42px repeat(6,1fr);gap:3px;margin-bottom:5px}
-.hm-hdr{font-size:8px;color:var(--red2);text-align:center;letter-spacing:1px}
+.hm-hdr{font-size:12px;color:var(--red2);text-align:center;letter-spacing:1px}
 .hm-row{display:grid;grid-template-columns:42px repeat(6,1fr);gap:3px;margin-bottom:3px;align-items:center}
-.hm-label{font-size:9px;color:var(--red);text-align:right;padding-right:6px}
-.hm-cell{height:27px;border-radius:3px;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:700}
+.hm-label{font-size:12px;color:var(--red);text-align:right;padding-right:6px}
+.hm-cell{height:30px;border-radius:3px;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700}
 .hm-cell.sb{background:#004020;color:#00ff88;border:1px solid rgba(0,255,136,.5)}
 .hm-cell.b{background:#002510;color:#66ffaa;border:1px solid rgba(0,255,136,.25)}
 .hm-cell.n{background:#150505;color:#664444;border:1px solid #330000}
@@ -109,7 +109,7 @@ body::before{content:'';position:fixed;inset:0;
 
 .hm-overall{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px}
 .hm-sum{background:#0d0000;border:1px solid var(--border);border-radius:4px;padding:10px;text-align:center}
-.hm-sum .hl{font-size:8px;color:var(--red2);letter-spacing:2px;margin-bottom:5px}
+.hm-sum .hl{font-size:11px;color:var(--red2);letter-spacing:2px;margin-bottom:5px}
 .hm-sum .hv{font-size:24px;font-weight:700}
 
 /* NEWS */
@@ -174,7 +174,7 @@ body::before{content:'';position:fixed;inset:0;
 .tabs{position:fixed;bottom:0;left:0;right:0;z-index:100;
   background:rgba(10,0,0,.99);border-top:2px solid var(--red);
   display:flex;box-shadow:0 -4px 20px rgba(255,0,0,.25)}
-.tab{flex:1;padding:10px 4px 8px;text-align:center;font-size:7px;
+.tab{flex:1;padding:10px 4px 8px;text-align:center;font-size:11px;
   letter-spacing:2px;color:#884444;cursor:pointer;text-transform:uppercase}
 .tab.active{color:var(--red);border-top:2px solid var(--red);
   text-shadow:0 0 8px rgba(255,0,0,.6);margin-top:-2px}
