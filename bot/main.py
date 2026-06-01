@@ -351,6 +351,45 @@ def generate_signal(tf_data):
 RISK_PER_TRADE = 1.0
 ACCOUNT_BALANCE = float(os.environ.get("ACCOUNT_BALANCE","10000"))
 
+def check_signal_results():
+    try:
+        from datetime import timedelta
+        signals = sb_select("signals", "executed=eq.false&order=created_at.desc&limit=20")
+        for sig in signals:
+            created = datetime.fromisoformat(sig["created_at"].replace("Z","+00:00"))
+            age_hours = (datetime.now(timezone.utc) - created).total_seconds() / 3600
+            if age_hours < 4:
+                continue
+            entry = float(sig.get("entry", 0))
+            tp = float(sig.get("tp", 0))
+            sl = float(sig.get("sl", 0))
+            direction = sig.get("direction", "buy")
+            prices = sb_select("bot_state", "id=eq.1")
+            if not prices:
+                continue
+            current = float(prices[0].get("price", 0))
+            if direction == "buy":
+                result = "TP" if current >= tp else "SL" if current <= sl else None
+                pnl = abs(tp-entry) if result=="TP" else -abs(sl-entry) if result=="SL" else None
+            else:
+                result = "TP" if current <= tp else "SL" if current >= sl else None
+                pnl = abs(entry-tp) if result=="TP" else -abs(entry-sl) if result=="SL" else None
+            if result:
+                sb_upsert("trades", {
+                    "signal_id": sig.get("id"),
+                    "direction": direction,
+                    "entry": entry,
+                    "sl": sl,
+                    "tp": tp,
+                    "result": result,
+                    "pnl": round(pnl, 2),
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                })
+                sb_upsert("signals", {"id": sig.get("id"), "executed": True})
+                add_log(f"📊 Trade closed: {result} PnL:{pnl:.2f}")
+    except Exception as e:
+        logger.error(f"check_signal_results error: {e}")
+
 def get_stats_from_supabase():
     trades = sb_select("trades","result=not.is.null&order=created_at.desc&limit=100")
     if not trades: return {"total":0}
@@ -608,7 +647,8 @@ def main():
             tf_data  = load_mtf()
             # Market analysis (news + AI) every 30 min
             run_market_analysis(tf_data)
-            
+
+            check_signal_results()
             sig      = generate_signal(tf_data)
             stats    = get_stats_from_supabase()
 
