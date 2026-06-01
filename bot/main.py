@@ -292,7 +292,10 @@ def generate_signal(tf_data):
         add_log(f"— No signal: {session_name}")
         return None
 
-    df = tf_data.get("1h") or tf_data.get(list(tf_data.keys())[-1])
+    df = tf_data.get("1h")
+if df is None:
+    keys = list(tf_data.keys())
+    df = tf_data.get(keys[-1]) if keys else None
     if df is None or len(df)<100: return None
     df = add_indicators(df)
 
