@@ -350,7 +350,7 @@ async function refresh(){
     const arr=await r.json();const state=arr[0]||{};
     document.getElementById('price').textContent=state.price||'—';
     document.getElementById('dot').className='dot'+(state.scanning?'':' off');
-    const ls=state.last_scan||'—';const lsEet=ls!=='—'?new Date(new Date().toISOString().slice(0,10)+'T'+ls.replace(' UTC','')+':00Z').toLocaleTimeString('et',{hour:'2-digit',minute:'2-digit'})+' EET':ls;document.getElementById('last-scan').textContent=`Last scan: ${lsEet}`;
+    const ls=state.last_scan||'—';document.getElementById('last-scan').textContent=`Last scan: ${ls}`;
     renderRisk(state.risk);renderStats(state.stats);renderLog(state.log);
     const sr=await fetch(`${SB_URL}/rest/v1/signals?order=created_at.desc&limit=1`,{headers:hdrs});
     renderSignal((await sr.json())[0]||null);
