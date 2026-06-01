@@ -293,11 +293,10 @@ def generate_signal(tf_data):
         return None
 
     df = tf_data.get("1h")
-if df is None:
-    keys = list(tf_data.keys())
-    df = tf_data.get(keys[-1]) if keys else None
+    if df is None:
+        keys = list(tf_data.keys())
+        df = tf_data.get(keys[-1]) if keys else None
     if df is None or len(df)<100: return None
-    df = add_indicators(df)
 
     bias, mtf_str, mtf_detail = get_mtf_bias(tf_data)
     if bias=="neutral":
