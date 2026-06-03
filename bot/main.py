@@ -121,9 +121,7 @@ MAX_DAILY_LOSS_PCT  = 3.0
 MAX_DRAWDOWN_PCT    = 10.0
 MAX_OPEN_SIGNALS    = 1
 MAX_LOSS_STREAK     = 3
-
-# ── FIX 3: Spread arvestus — gold ICMarkets keskmine spread
-GOLD_SPREAD_POINTS  = 0.35  # $0.35 per lot — arvestatakse SL distantsi sisse
+GOLD_SPREAD_POINTS  = 0.35
 
 def get_risk_state() -> dict:
     try:
@@ -148,14 +146,12 @@ def check_risk_limits() -> tuple[bool, str]:
     now        = datetime.now(timezone.utc)
     today      = now.strftime("%Y-%m-%d")
 
-    # Reset daily kell 00:00 UTC
     if risk_state.get("daily_reset") != today:
         risk_state["daily_loss"]  = 0.0
         risk_state["daily_reset"] = today
         save_risk_state(risk_state)
         add_log("🔄 Daily loss counter reset")
 
-    # Kaitse 1: Loss streak paus
     paused_until = risk_state.get("paused_until")
     if paused_until:
         pause_dt = datetime.fromisoformat(paused_until)
@@ -168,18 +164,15 @@ def check_risk_limits() -> tuple[bool, str]:
             save_risk_state(risk_state)
             add_log("✅ Loss streak pause lifted")
 
-    # Kaitse 2: Daily loss limit
     daily_loss     = abs(float(risk_state.get("daily_loss", 0)))
     daily_loss_pct = (daily_loss / _BALANCE_DEFAULT) * 100
     if daily_loss_pct >= MAX_DAILY_LOSS_PCT:
         return False, f"Daily loss limit {daily_loss_pct:.1f}% >= {MAX_DAILY_LOSS_PCT}% — waiting for reset"
 
-    # Kaitse 3: Max drawdown — päevane paus
     drawdown_pct = (1 - balance / _BALANCE_DEFAULT) * 100
     if drawdown_pct >= MAX_DRAWDOWN_PCT:
         return False, f"Max drawdown {drawdown_pct:.1f}% >= {MAX_DRAWDOWN_PCT}% — paused until {today} 00:00 UTC reset"
 
-    # Kaitse 4: Max open signals
     open_signals = sb_select("signals", "executed=eq.false&select=id")
     if len(open_signals) >= MAX_OPEN_SIGNALS:
         return False, f"Max open signals ({MAX_OPEN_SIGNALS}) reached — waiting for close"
@@ -420,6 +413,28 @@ def get_price():
     except: pass
     return 0.0, 0.0
 
+def get_candles_since(created_dt: datetime) -> pd.DataFrame | None:
+    """
+    Laeb 1-minutilised küünlad signaali loomisest kuni praeguse hetkeni.
+    Kasutatakse täpseks TP/SL kontrolliks — näeme kas hind KAI läbi taseme.
+    """
+    try:
+        import yfinance as yf
+        age_hours = (datetime.now(timezone.utc) - created_dt).total_seconds() / 3600
+        # yfinance 1m andmed saadaval kuni 7 päeva
+        period = "1d" if age_hours <= 24 else "5d" if age_hours <= 120 else "7d"
+        df = yf.Ticker("GC=F").history(interval="1m", period=period, auto_adjust=True)
+        if df is None or df.empty:
+            return None
+        df.columns = [c.lower() for c in df.columns]
+        # Filtreeri ainult signaali loomisest alates
+        df.index = pd.to_datetime(df.index, utc=True)
+        df = df[df.index >= created_dt]
+        return df if len(df) > 0 else None
+    except Exception as e:
+        logger.error(f"get_candles_since error: {e}")
+        return None
+
 
 # ─────────────────────────────────────────────────────────
 #  SIGNAL GENERATION
@@ -429,8 +444,6 @@ TF_WEIGHTS = {"15m":0.10,"30m":0.20,"1h":0.30,"4h":0.40}
 MIN_SCORE  = 55
 ATR_SL     = 1.3
 ATR_TP     = 2.6
-
-# ── FIX 3: Signaal aegub 8h pärast — Telegram teade
 SIGNAL_EXPIRY_HOURS = 8
 
 def get_session():
@@ -583,13 +596,9 @@ def generate_signal(tf_data):
 
     atr   = float(last.atr)
     price = float(last.close)
-
-    # ── FIX 3: Lisa spread SL distantsi sisse
-    # BUY: SL on all → spread suurendab efektiivset kahjumit → lisa spread SL distantsi
-    # SELL: SL on üleval → spread lisatakse entry hinnale
-    sl = round(price - atr*ATR_SL - GOLD_SPREAD_POINTS if bias=="buy" else price + atr*ATR_SL + GOLD_SPREAD_POINTS, 2)
-    tp = round(price + atr*ATR_TP if bias=="buy" else price - atr*ATR_TP, 2)
-    rr = round(abs(tp-price)/abs(sl-price), 2)
+    sl    = round(price - atr*ATR_SL - GOLD_SPREAD_POINTS if bias=="buy" else price + atr*ATR_SL + GOLD_SPREAD_POINTS, 2)
+    tp    = round(price + atr*ATR_TP if bias=="buy" else price - atr*ATR_TP, 2)
+    rr    = round(abs(tp-price)/abs(sl-price), 2)
 
     return {
         "direction":     bias,
@@ -619,6 +628,16 @@ def generate_signal(tf_data):
 RISK_PER_TRADE = 1.0
 
 def check_signal_results():
+    """
+    TP/SL kontroll 1-minutiliste küünaldega.
+    Laeb kõik küünlad signaali loomisest alates ja kontrollib
+    kas hind KAI läbi TP või SL taseme — mitte ainult hetke hinda.
+
+    Järjestus on kriitiline:
+    - Vaatame küünlad kronoloogilises järjekorras
+    - Esimene tase mis puudutatakse (TP või SL) = tulemus
+    - Breakeven: kui hind liikus 1x ATR kasumi suunas enne SL-i → SL = entry
+    """
     try:
         signals = sb_select("signals", "executed=eq.false&order=created_at.desc&limit=20")
         for sig in signals:
@@ -631,54 +650,97 @@ def check_signal_results():
             atr       = float(sig.get("atr", 5.0))
             direction = sig.get("direction", "buy")
             sig_id    = sig.get("id")
+            breakeven = sig.get("breakeven", False)
+            effective_sl = entry if breakeven else sl
 
-            # ── FIX 5: Signaal aegub SIGNAL_EXPIRY_HOURS pärast → Telegram teade + sulge
+            # Signaal aegub SIGNAL_EXPIRY_HOURS pärast
             if age_hours >= SIGNAL_EXPIRY_HOURS:
                 sb_upsert("signals", {"id": sig_id, "executed": True})
                 add_log(f"⏰ Signal expired: {direction.upper()} @ {entry} ({age_hours:.1f}h old)")
                 send_telegram(
                     f"⏰ <b>Signaal aegunud</b>\n"
                     f"{direction.upper()} @ {entry}\n"
-                    f"Signaal oli avatud {age_hours:.1f}h — suletud ilma tehinguta.\n"
-                    f"TP: {tp}  |  SL: {sl}"
+                    f"Avatud {age_hours:.1f}h — suletud ilma tehinguta.\n"
+                    f"TP: {tp}  |  SL: {effective_sl}"
                 )
                 continue
 
-            if age_hours < 1:
-                continue
-
-            prices = sb_select("bot_state", "id=eq.1")
-            if not prices: continue
-            current = float(prices[0].get("price", 0))
-            if current == 0: continue
-
-            # Breakeven loogika
-            breakeven = sig.get("breakeven", False)
-            if not breakeven:
-                if direction == "buy" and current >= entry + atr:
-                    sb_upsert("signals", {"id": sig_id, "breakeven": True, "sl": entry})
-                    add_log(f"🔒 Breakeven: BUY {entry} → SL = entry")
-                    send_telegram(f"🔒 <b>Breakeven aktiveeritud</b>\nBUY @ {entry} — SL liigutati entry peale")
-                    continue
-                elif direction == "sell" and current <= entry - atr:
-                    sb_upsert("signals", {"id": sig_id, "breakeven": True, "sl": entry})
-                    add_log(f"🔒 Breakeven: SELL {entry} → SL = entry")
-                    send_telegram(f"🔒 <b>Breakeven aktiveeritud</b>\nSELL @ {entry} — SL liigutati entry peale")
-                    continue
-
-            effective_sl = entry if breakeven else sl
-
-            if direction == "buy":
-                result   = "TP" if current >= tp else "SL" if current <= effective_sl else None
-                pnl_pts  = abs(tp-entry) if result=="TP" else -abs(effective_sl-entry) if result=="SL" else None
+            # Lae 1-minutilised küünlad signaali loomisest alates
+            candles = get_candles_since(created)
+            if candles is None or len(candles) == 0:
+                # Fallback: kasuta hetke hinda kui küünlad pole saadaval
+                prices = sb_select("bot_state", "id=eq.1")
+                if not prices: continue
+                current = float(prices[0].get("price", 0))
+                if current == 0: continue
+                candles_highs = [current]
+                candles_lows  = [current]
             else:
-                result   = "TP" if current <= tp else "SL" if current >= effective_sl else None
-                pnl_pts  = abs(entry-tp) if result=="TP" else -abs(entry-effective_sl) if result=="SL" else None
+                candles_highs = candles["high"].tolist()
+                candles_lows  = candles["low"].tolist()
+
+            # Käi küünlad läbi kronoloogilises järjekorras
+            # Leia esimene küünal kus TP või SL puudutati
+            result    = None
+            hit_price = None
+            hit_time  = None
+
+            candle_index = candles.index.tolist() if candles is not None and len(candles) > 0 else []
+
+            for i, (high, low) in enumerate(zip(candles_highs, candles_lows)):
+                # Breakeven kontroll — kui hind liikus 1x ATR kasumi suunas
+                if not breakeven:
+                    if direction == "buy" and high >= entry + atr:
+                        breakeven    = True
+                        effective_sl = entry
+                        sb_upsert("signals", {"id": sig_id, "breakeven": True, "sl": entry})
+                        add_log(f"🔒 Breakeven: BUY {entry} → SL = entry")
+                        send_telegram(f"🔒 <b>Breakeven aktiveeritud</b>\nBUY @ {entry} — SL liigutati entry peale")
+                    elif direction == "sell" and low <= entry - atr:
+                        breakeven    = True
+                        effective_sl = entry
+                        sb_upsert("signals", {"id": sig_id, "breakeven": True, "sl": entry})
+                        add_log(f"🔒 Breakeven: SELL {entry} → SL = entry")
+                        send_telegram(f"🔒 <b>Breakeven aktiveeritud</b>\nSELL @ {entry} — SL liigutati entry peale")
+
+                # TP/SL kontroll — kumb puudutati esimesena selles küünlas?
+                if direction == "buy":
+                    tp_hit = high >= tp
+                    sl_hit = low  <= effective_sl
+                else:
+                    tp_hit = low  <= tp
+                    sl_hit = high >= effective_sl
+
+                if tp_hit and sl_hit:
+                    # Mõlemad samas küünlas — konservatiivselt SL (halvem stsenaarium)
+                    result    = "SL"
+                    hit_price = effective_sl
+                    hit_time  = candle_index[i] if i < len(candle_index) else None
+                    break
+                elif tp_hit:
+                    result    = "TP"
+                    hit_price = tp
+                    hit_time  = candle_index[i] if i < len(candle_index) else None
+                    break
+                elif sl_hit:
+                    result    = "SL"
+                    hit_price = effective_sl
+                    hit_time  = candle_index[i] if i < len(candle_index) else None
+                    break
 
             if result:
                 balance = get_account_balance()
                 lot     = float(sig.get("lot", 0.01))
+
+                if result == "TP":
+                    pnl_pts = abs(tp - entry)
+                else:
+                    pnl_pts = -abs(effective_sl - entry)
+
                 pnl_eur = round(pnl_pts * lot * 100, 2)
+
+                hit_time_str = str(hit_time)[:16] if hit_time else "unknown"
+                add_log(f"📊 {result} hit @ {hit_price} (küünal: {hit_time_str})")
 
                 sb_upsert("trades", {
                     "signal_id": sig_id,
@@ -700,9 +762,10 @@ def check_signal_results():
                 add_log(f"📊 Trade closed: {result}  PnL: {pnl_eur:+.2f}€  Balance: {new_balance:.2f}€")
                 send_telegram(
                     f"{'✅' if result=='TP' else '❌'} <b>Tehing suletud: {result}</b>\n"
-                    f"{'BUY' if direction=='buy' else 'SELL'} @ {entry}\n"
+                    f"{'BUY' if direction=='buy' else 'SELL'} @ {entry} → {result} @ {hit_price}\n"
                     f"PnL: <b>{pnl_eur:+.2f}€</b>  |  Balance: <b>{new_balance:.2f}€</b>"
                 )
+
     except Exception as e:
         logger.error(f"check_signal_results error: {e}")
 
@@ -722,10 +785,6 @@ def get_stats_from_supabase():
     }
 
 def calc_lot(entry, sl, score):
-    """
-    Dünaamiline lot + spread arvestus.
-    SL distants on juba spread-korrigeeritud generate_signal'ist.
-    """
     balance  = get_account_balance()
     risk_pct = RISK_PER_TRADE / 100
     factor   = 1.0 + 0.3 * max(0, (score - MIN_SCORE)) / (100 - MIN_SCORE)
