@@ -135,12 +135,26 @@ body::before{content:'';position:fixed;inset:0;
 .ai-text{font-size:11px;color:#ffcccc;line-height:1.7}
 .ai-key{margin-top:8px;font-size:9px;color:var(--red);padding-top:8px;border-top:1px solid rgba(255,0,0,.2)}
 
-/* RISK */
+/* RISK — FIX 4: uued näidikud */
 .risk-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .risk-item{background:#0d0000;border:1px solid var(--border);border-radius:4px;padding:12px}
 .risk-k{font-size:8px;color:var(--red2);letter-spacing:3px;margin-bottom:5px}
 .risk-v{font-size:22px;font-weight:700;color:#ffffff}
 .ok{color:var(--green)!important}.warn{color:#ffaa44!important}.bad{color:var(--red)!important}
+
+/* Streak progress bar */
+.streak-bar{margin-top:6px;height:5px;background:#2a0000;border-radius:3px;overflow:hidden}
+.streak-fill{height:100%;border-radius:3px;transition:width .4s}
+.streak-fill.ok{background:var(--green)}
+.streak-fill.warn{background:#ffaa44}
+.streak-fill.bad{background:var(--red);box-shadow:0 0 6px var(--red)}
+
+/* Daily loss progress bar */
+.loss-bar{margin-top:6px;height:5px;background:#2a0000;border-radius:3px;overflow:hidden}
+.loss-fill{height:100%;border-radius:3px;transition:width .4s;background:linear-gradient(90deg,#004400,#ffaa44,var(--red))}
+
+.risk-section-title{font-size:9px;color:var(--red);letter-spacing:3px;margin:12px 0 8px;
+  padding-top:10px;border-top:1px solid var(--border)}
 
 .stats-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}
 .stat-item{background:#0d0000;border:1px solid var(--border);border-radius:4px;padding:12px}
@@ -156,6 +170,7 @@ body::before{content:'';position:fixed;inset:0;
 .si-entry{font-size:14px;font-weight:700;color:#ffffff}
 .si-meta{font-size:9px;color:var(--red2);margin-top:2px}
 .si-score{font-size:15px;color:var(--red);font-weight:700}
+.si-expired{font-size:9px;color:#664444;font-style:italic}
 
 /* LOG */
 .log-wrap{max-height:220px;overflow-y:auto;border:1px solid var(--border);border-radius:4px;background:#080000;padding:10px}
@@ -240,6 +255,10 @@ body::before{content:'';position:fixed;inset:0;
     <div class="card">
       <div class="card-title">Risk Status</div>
       <div class="risk-grid" id="risk-grid"></div>
+
+      <!-- FIX 4: Streak + Daily loss progress -->
+      <div class="risk-section-title">▶ PROTECTION STATUS</div>
+      <div id="risk-protection"></div>
     </div>
     <div class="card">
       <div class="card-title">Statistics</div>
@@ -287,73 +306,204 @@ function switchTab(name,el){
 }
 
 function renderSignal(sig){
-  if(!sig){document.getElementById('sig-body').innerHTML=`<div class="sig-empty"><div class="ico">☣</div><div class="t1">NO TARGET ACQUIRED</div><div class="t2">Active during London & NY sessions</div></div>`;return;}
-  const d=sig.direction,mtf=sig.mtf_detail||{};
-  const mtfHtml=Object.entries(mtf).map(([tf,v])=>{const cls=v.includes('bull')?'bull':v.includes('bear')?'bear':'';const ic=v.includes('bull')?'↑':v.includes('bear')?'↓':'→';return`<div class="mtf-cell ${cls}"><div class="mt">${tf}</div><div class="md">${ic}</div></div>`;}).join('');
-  document.getElementById('sig-body').innerHTML=`<div class="sig-inner ${d}"><div class="sig-dir ${d}">${d==='buy'?'▲ BUY':'▼ SELL'}</div><div class="sig-meta">${sig.regime||''} · ${sig.session||''}</div><div class="score-row"><div class="score-num">${sig.score}</div><div class="score-label">/100</div><div class="score-bar"><div class="score-fill" style="width:${sig.score}%"></div></div></div><div class="levels"><div class="lev en"><div class="lt">ENTRY</div><div class="lv">${sig.entry}</div></div><div class="lev tp"><div class="lt">TARGET</div><div class="lv">${sig.tp}</div></div><div class="lev sl"><div class="lt">STOP</div><div class="lv">${sig.sl}</div></div></div><div class="tags"><div class="tag">R:R <b>1:${sig.rr}</b></div><div class="tag">RSI <b>${sig.rsi}</b></div><div class="tag">ADX <b>${sig.adx}</b></div><div class="tag">ATR <b>${sig.atr}</b></div></div><div class="mtf-row">${mtfHtml}</div></div>`;
+  if(!sig){
+    document.getElementById('sig-body').innerHTML=`<div class="sig-empty"><div class="ico">☣</div><div class="t1">NO TARGET ACQUIRED</div><div class="t2">Active during London & NY sessions</div></div>`;
+    return;
+  }
+  const d=sig.direction, mtf=sig.mtf_detail||{};
+  const mtfHtml=Object.entries(mtf).map(([tf,v])=>{
+    const cls=v.includes('bull')?'bull':v.includes('bear')?'bear':'';
+    const ic=v.includes('bull')?'↑':v.includes('bear')?'↓':'→';
+    return`<div class="mtf-cell ${cls}"><div class="mt">${tf}</div><div class="md">${ic}</div></div>`;
+  }).join('');
+  const age = sig.created_at ? Math.round((Date.now()-new Date(sig.created_at))/60000) : 0;
+  const expiry = 8*60; // 8h in minutes
+  const remaining = Math.max(0, expiry - age);
+  const expiryStr = remaining > 60 ? `${Math.floor(remaining/60)}h ${remaining%60}m` : `${remaining}m`;
+  document.getElementById('sig-body').innerHTML=`
+    <div class="sig-inner ${d}">
+      <div class="sig-dir ${d}">${d==='buy'?'▲ BUY':'▼ SELL'}</div>
+      <div class="sig-meta">${sig.regime||''} · ${sig.session||''} · <span style="color:#ffaa44">⏰ ${expiryStr} left</span></div>
+      <div class="score-row">
+        <div class="score-num">${sig.score}</div>
+        <div class="score-label">/100</div>
+        <div class="score-bar"><div class="score-fill" style="width:${sig.score}%"></div></div>
+      </div>
+      <div class="levels">
+        <div class="lev en"><div class="lt">ENTRY</div><div class="lv">${sig.entry}</div></div>
+        <div class="lev tp"><div class="lt">TARGET</div><div class="lv">${sig.tp}</div></div>
+        <div class="lev sl"><div class="lt">STOP</div><div class="lv">${sig.sl}</div></div>
+      </div>
+      <div class="tags">
+        <div class="tag">R:R <b>1:${sig.rr}</b></div>
+        <div class="tag">RSI <b>${sig.rsi}</b></div>
+        <div class="tag">ADX <b>${sig.adx}</b></div>
+        <div class="tag">ATR <b>${sig.atr}</b></div>
+        <div class="tag">Lot <b>${sig.lot||'0.01'}</b></div>
+      </div>
+      <div class="mtf-row">${mtfHtml}</div>
+    </div>`;
 }
 
 async function loadMarketsPage(){
   marketsLoaded=false;
   try{
     const r=await fetch(`${SB_URL}/rest/v1/market_analysis?id=eq.1`,{headers:hdrs});
-    const arr=await r.json();const d=arr[0]||{};
+    const arr=await r.json(); const d=arr[0]||{};
     renderHeatmap(d.heatmap_data||{},d.bull_pct||50,d.bear_pct||50);
-    renderAI(d);renderNews(d.news||[]);
+    renderAI(d); renderNews(d.news||[]);
   }catch(e){document.getElementById('heatmap').innerHTML='<div style="color:#aa6666;font-size:11px;padding:10px">Loading...</div>';}
   marketsLoaded=true;
 }
 
 function renderHeatmap(hm,bullPct,bearPct){
-  const tfs=['15m','30m','1h','4h'];const inds=['RSI','MACD','EMA','ADX','BB','STOCH'];
+  const tfs=['15m','30m','1h','4h']; const inds=['RSI','MACD','EMA','ADX','BB','STOCH'];
   const lbl={'sb':'▲▲','b':'▲','n':'—','br':'▼','sbr':'▼▼'};
-  if(!Object.keys(hm).length){document.getElementById('heatmap').innerHTML='<div style="color:#aa6666;font-size:11px;padding:10px">Heatmap updating... (every 30 min)</div>';document.getElementById('hm-overall').innerHTML='';return;}
-  document.getElementById('heatmap').innerHTML=tfs.map(tf=>{const tfd=hm[tf]||{};return`<div class="hm-row"><div class="hm-label">${tf}</div>${inds.map(ind=>{const c=tfd[ind]||'n';return`<div class="hm-cell ${c}">${lbl[c]||'—'}</div>`;}).join('')}</div>`;}).join('');
-  document.getElementById('hm-overall').innerHTML=`<div class="hm-sum"><div class="hl">BULL STRENGTH</div><div class="hv ok">${bullPct}%</div></div><div class="hm-sum"><div class="hl">BEAR STRENGTH</div><div class="hv bad">${bearPct}%</div></div>`;
+  if(!Object.keys(hm).length){
+    document.getElementById('heatmap').innerHTML='<div style="color:#aa6666;font-size:11px;padding:10px">Heatmap updating... (every 30 min)</div>';
+    document.getElementById('hm-overall').innerHTML=''; return;
+  }
+  document.getElementById('heatmap').innerHTML=tfs.map(tf=>{
+    const tfd=hm[tf]||{};
+    return`<div class="hm-row"><div class="hm-label">${tf}</div>${inds.map(ind=>{const c=tfd[ind]||'n';return`<div class="hm-cell ${c}">${lbl[c]||'—'}</div>`;}).join('')}</div>`;
+  }).join('');
+  document.getElementById('hm-overall').innerHTML=`
+    <div class="hm-sum"><div class="hl">BULL STRENGTH</div><div class="hv ok">${bullPct}%</div></div>
+    <div class="hm-sum"><div class="hl">BEAR STRENGTH</div><div class="hv bad">${bearPct}%</div></div>`;
 }
 
 function renderAI(d){
-  if(!d||!d.verdict){document.getElementById('ai-section').innerHTML='<div style="color:#aa6666;font-size:11px;padding:10px">Add CLAUDE_KEY to Railway Variables for AI analysis</div>';return;}
+  if(!d||!d.verdict){
+    document.getElementById('ai-section').innerHTML='<div style="color:#aa6666;font-size:11px;padding:10px">Add CLAUDE_KEY to Railway Variables for AI analysis</div>';
+    return;
+  }
   const vc=d.verdict==='BULLISH'?'bull':d.verdict==='BEARISH'?'bear':'neutral';
   const vi=d.verdict==='BULLISH'?'↑':d.verdict==='BEARISH'?'↓':'→';
   const upd=d.updated_at?new Date(d.updated_at).toLocaleTimeString('et',{hour:'2-digit',minute:'2-digit'}):'-';
-  document.getElementById('ai-section').innerHTML=`<div class="ai-box"><div class="ai-top"><span class="ai-badge">AI ANALYSIS</span><span class="ai-conf">conf: ${d.confidence}% · ${upd}</span><span class="ai-verdict ${vc}">${vi} ${d.verdict}</span></div><div class="ai-text">${d.summary||''}</div><div class="ai-key">⚡ ${d.key_factor||''}</div></div>`;
+  document.getElementById('ai-section').innerHTML=`
+    <div class="ai-box">
+      <div class="ai-top">
+        <span class="ai-badge">AI ANALYSIS</span>
+        <span class="ai-conf">conf: ${d.confidence}% · ${upd}</span>
+        <span class="ai-verdict ${vc}">${vi} ${d.verdict}</span>
+      </div>
+      <div class="ai-text">${d.summary||''}</div>
+      <div class="ai-key">⚡ ${d.key_factor||''}</div>
+    </div>`;
 }
 
 function renderNews(news){
   if(!news||!news.length){document.getElementById('news-list').innerHTML='<div style="color:#aa6666;font-size:11px">News updates every 30 min</div>';return;}
   const slm={'bull':'↑ BULLISH','bear':'↓ BEARISH','neutral':'→ NEUTRAL'};
-  document.getElementById('news-list').innerHTML=news.map(n=>{const ts=n.mins_ago<60?`${n.mins_ago}m ago`:`${Math.round(n.mins_ago/60)}h ago`;return`<div class="news-item ${n.sentiment}"><div class="news-headline">${n.title}</div><div class="news-meta"><span class="news-s ${n.sentiment}">${slm[n.sentiment]||'—'}</span><span class="news-time">${ts}</span></div></div>`;}).join('');
+  document.getElementById('news-list').innerHTML=news.map(n=>{
+    const ts=n.mins_ago<60?`${n.mins_ago}m ago`:`${Math.round(n.mins_ago/60)}h ago`;
+    return`<div class="news-item ${n.sentiment}"><div class="news-headline">${n.title}</div><div class="news-meta"><span class="news-s ${n.sentiment}">${slm[n.sentiment]||'—'}</span><span class="news-time">${ts}</span></div></div>`;
+  }).join('');
 }
 
 function renderRisk(r){
-  if(!r||!r.balance)return;
-  const ok=r.can_trade;
-  document.getElementById('risk-grid').innerHTML=`<div class="risk-item"><div class="risk-k">BALANCE</div><div class="risk-v">$${(r.balance||0).toFixed(0)}</div></div><div class="risk-item"><div class="risk-k">STATUS</div><div class="risk-v ${ok?'ok':'bad'}">${ok?'ACTIVE':'OFFLINE'}</div></div><div class="risk-item"><div class="risk-k">DAILY P&L</div><div class="risk-v ${(r.daily_pnl||0)>=0?'ok':'bad'}">${(r.daily_pnl||0)>=0?'+':''}$${(r.daily_pnl||0).toFixed(2)}</div></div><div class="risk-item"><div class="risk-k">DRAWDOWN</div><div class="risk-v ${(r.drawdown_pct||0)<4?'ok':(r.drawdown_pct||0)<8?'warn':'bad'}">${(r.drawdown_pct||0).toFixed(1)}%</div></div>`;
+  if(!r||!r.balance) return;
+  const ok = r.can_trade;
+  const ddPct = (r.drawdown_pct||0).toFixed(1);
+  const ddCls = r.drawdown_pct<4?'ok':r.drawdown_pct<8?'warn':'bad';
+  const dlPct = (r.daily_loss_pct||0).toFixed(1);
+  const dlCls = r.daily_loss_pct<1?'ok':r.daily_loss_pct<2?'warn':'bad';
+  const streak = r.loss_streak||0;
+  const maxStreak = 3;
+  const streakCls = streak===0?'ok':streak===1?'warn':'bad';
+  const streakPct = Math.round(streak/maxStreak*100);
+  const spreadVal = r.spread !== undefined ? r.spread.toFixed(2) : '0.35';
+
+  // Main grid
+  document.getElementById('risk-grid').innerHTML=`
+    <div class="risk-item">
+      <div class="risk-k">BALANCE</div>
+      <div class="risk-v">${(r.balance||0).toFixed(2)}€</div>
+    </div>
+    <div class="risk-item">
+      <div class="risk-k">STATUS</div>
+      <div class="risk-v ${ok?'ok':'bad'}">${ok?'ACTIVE':r.paused?'PAUSED':'BLOCKED'}</div>
+    </div>
+    <div class="risk-item">
+      <div class="risk-k">DRAWDOWN</div>
+      <div class="risk-v ${ddCls}">${ddPct}%</div>
+    </div>
+    <div class="risk-item">
+      <div class="risk-k">DAILY LOSS</div>
+      <div class="risk-v ${dlCls}">${dlPct}%</div>
+    </div>`;
+
+  // FIX 4: Protection status section
+  document.getElementById('risk-protection').innerHTML=`
+    <div class="risk-item" style="margin-bottom:8px">
+      <div class="risk-k">LOSS STREAK &nbsp;<span class="${streakCls}">${streak}/${maxStreak}</span></div>
+      <div class="streak-bar"><div class="streak-fill ${streakCls}" style="width:${streakPct}%"></div></div>
+    </div>
+    <div class="risk-item" style="margin-bottom:8px">
+      <div class="risk-k">DAILY LOSS USED &nbsp;<span class="${dlCls}">${(r.daily_loss_eur||0).toFixed(2)}€ / ${(r.balance*0.03||3).toFixed(2)}€ limit</span></div>
+      <div class="loss-bar"><div class="loss-fill" style="width:${Math.min(100,r.daily_loss_pct/3*100||0)}%"></div></div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+      <div class="risk-item">
+        <div class="risk-k">SPREAD</div>
+        <div class="risk-v" style="font-size:16px">${spreadVal}$</div>
+      </div>
+      <div class="risk-item">
+        <div class="risk-k">NET P&L</div>
+        <div class="risk-v ${(r.daily_pnl||0)>=0?'ok':'bad'}" style="font-size:16px">${(r.daily_pnl||0)>=0?'+':''}${(r.daily_pnl||0).toFixed(2)}€</div>
+      </div>
+    </div>`;
 }
 
 function renderStats(s){
   if(!s||!s.total){document.getElementById('stats-grid').innerHTML='<div style="color:#aa6666;grid-column:1/-1;font-size:11px;padding:10px">No targets eliminated yet</div>';return;}
-  document.getElementById('stats-grid').innerHTML=`<div class="stat-item"><div class="stat-k">TRADES</div><div class="stat-v">${s.total}</div></div><div class="stat-item"><div class="stat-k">WIN RATE</div><div class="stat-v ${s.win_rate>=50?'ok':'bad'}">${s.win_rate}%</div></div><div class="stat-item"><div class="stat-k">PROF FACTOR</div><div class="stat-v">${s.profit_factor}</div></div><div class="stat-item"><div class="stat-k">NET P&L</div><div class="stat-v ${(s.net_pnl||0)>=0?'ok':'bad'}">$${s.net_pnl}</div></div>`;
+  document.getElementById('stats-grid').innerHTML=`
+    <div class="stat-item"><div class="stat-k">TRADES</div><div class="stat-v">${s.total}</div></div>
+    <div class="stat-item"><div class="stat-k">WIN RATE</div><div class="stat-v ${s.win_rate>=50?'ok':'bad'}">${s.win_rate}%</div></div>
+    <div class="stat-item"><div class="stat-k">PROF FACTOR</div><div class="stat-v">${s.profit_factor}</div></div>
+    <div class="stat-item"><div class="stat-k">NET P&L</div><div class="stat-v ${(s.net_pnl||0)>=0?'ok':'bad'}">${s.net_pnl}€</div></div>`;
 }
 
 function renderHistory(sigs){
   if(!sigs||!sigs.length){document.getElementById('sig-list').innerHTML='<div style="color:#aa6666;padding:10px">No signals yet</div>';return;}
-  document.getElementById('sig-list').innerHTML=sigs.slice(0,20).map(s=>`<div class="sig-item"><div class="si-dir ${s.direction}">${(s.direction||'').toUpperCase()}</div><div class="si-info"><div class="si-entry">${s.entry||'—'}</div><div class="si-meta">TP:${s.tp||'—'} · SL:${s.sl||'—'} · ${(s.created_at||'').slice(11,16)}</div></div><div class="si-score">${s.score||'—'}</div></div>`).join('');
+  document.getElementById('sig-list').innerHTML=sigs.slice(0,20).map(s=>{
+    const age = s.created_at ? Math.round((Date.now()-new Date(s.created_at))/3600000) : 0;
+    const isExpired = s.executed && age >= 8;
+    const statusBadge = s.executed
+      ? `<span style="font-size:9px;color:${isExpired?'#664444':'#888'}">
+          ${isExpired?'EXPIRED':'CLOSED'}</span>`
+      : `<span style="font-size:9px;color:#ffaa44">OPEN ⏰${Math.max(0,8-age)}h</span>`;
+    return`<div class="sig-item">
+      <div class="si-dir ${s.direction}">${(s.direction||'').toUpperCase()}</div>
+      <div class="si-info">
+        <div class="si-entry">${s.entry||'—'}</div>
+        <div class="si-meta">TP:${s.tp||'—'} · SL:${s.sl||'—'} · ${(s.created_at||'').slice(11,16)} UTC</div>
+        ${statusBadge}
+      </div>
+      <div class="si-score">${s.score||'—'}</div>
+    </div>`;
+  }).join('');
 }
 
-function renderLog(lines){const el=document.getElementById('log-inner');el.innerHTML=(lines||[]).map(l=>`<div class="log-line">${l}</div>`).join('');el.scrollTop=el.scrollHeight;}
+function renderLog(lines){
+  const el=document.getElementById('log-inner');
+  el.innerHTML=(lines||[]).map(l=>`<div class="log-line">${l}</div>`).join('');
+  el.scrollTop=el.scrollHeight;
+}
 
 async function refresh(){
   try{
     const r=await fetch(`${SB_URL}/rest/v1/bot_state?id=eq.1`,{headers:hdrs});
-    const arr=await r.json();const state=arr[0]||{};
+    const arr=await r.json(); const state=arr[0]||{};
     document.getElementById('price').textContent=state.price||'—';
     document.getElementById('dot').className='dot'+(state.scanning?'':' off');
-    const ls=state.last_scan||'—';document.getElementById('last-scan').textContent=`Last scan: ${ls}`;
-    renderRisk(state.risk);renderStats(state.stats);renderLog(state.log);
-    const sr=await fetch(`${SB_URL}/rest/v1/signals?order=created_at.desc&limit=1`,{headers:hdrs});
-    renderSignal((await sr.json())[0]||null);
+    document.getElementById('last-scan').textContent=`Last scan: ${state.last_scan||'—'}`;
+    renderRisk(state.risk);
+    renderStats(state.stats);
+    renderLog(state.log);
+    const sr=await fetch(`${SB_URL}/rest/v1/signals?executed=eq.false&order=created_at.desc&limit=1`,{headers:hdrs});
+    const openSigs = await sr.json();
+    renderSignal(openSigs[0]||null);
     const hr=await fetch(`${SB_URL}/rest/v1/signals?order=created_at.desc&limit=20`,{headers:hdrs});
     renderHistory(await hr.json());
   }catch(e){console.error(e);}

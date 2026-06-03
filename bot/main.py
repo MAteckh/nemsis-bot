@@ -117,16 +117,15 @@ def get_account_balance() -> float:
 #  RISK PROTECTION — 4 kaitset
 # ─────────────────────────────────────────────────────────
 
-MAX_DAILY_LOSS_PCT  = 3.0   # 3% päevakahjum → stop
-MAX_DRAWDOWN_PCT    = 10.0  # 10% kogu langus → stop
-MAX_OPEN_SIGNALS    = 1     # korraga max 1 avatud signaal
-MAX_LOSS_STREAK     = 3     # 3 kaotust järjest → 24h paus
+MAX_DAILY_LOSS_PCT  = 3.0
+MAX_DRAWDOWN_PCT    = 10.0
+MAX_OPEN_SIGNALS    = 1
+MAX_LOSS_STREAK     = 3
+
+# ── FIX 3: Spread arvestus — gold ICMarkets keskmine spread
+GOLD_SPREAD_POINTS  = 0.35  # $0.35 per lot — arvestatakse SL distantsi sisse
 
 def get_risk_state() -> dict:
-    """
-    Loeb risk state Supabase'ist.
-    Tagastab: daily_loss, drawdown, loss_streak, paused_until
-    """
     try:
         rows = sb_select("bot_state", "id=eq.1&select=risk_state")
         if rows and rows[0].get("risk_state"):
@@ -134,33 +133,29 @@ def get_risk_state() -> dict:
     except Exception as e:
         logger.warning(f"Risk state fetch error: {e}")
     return {
-        "daily_loss":    0.0,
-        "daily_reset":   datetime.now(timezone.utc).strftime("%Y-%m-%d"),
-        "loss_streak":   0,
-        "paused_until":  None,
+        "daily_loss":   0.0,
+        "daily_reset":  datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+        "loss_streak":  0,
+        "paused_until": None,
     }
 
 def save_risk_state(state: dict):
     sb_upsert("bot_state", {"id": 1, "risk_state": state})
 
 def check_risk_limits() -> tuple[bool, str]:
-    """
-    Kontrollib kõiki 4 kaitset.
-    Tagastab (can_trade: bool, reason: str)
-    """
-    balance     = get_account_balance()
-    risk_state  = get_risk_state()
-    now         = datetime.now(timezone.utc)
+    balance    = get_account_balance()
+    risk_state = get_risk_state()
+    now        = datetime.now(timezone.utc)
+    today      = now.strftime("%Y-%m-%d")
 
-    # ── Reset daily loss kell 00:00 UTC
-    today = now.strftime("%Y-%m-%d")
+    # Reset daily kell 00:00 UTC
     if risk_state.get("daily_reset") != today:
         risk_state["daily_loss"]  = 0.0
         risk_state["daily_reset"] = today
         save_risk_state(risk_state)
         add_log("🔄 Daily loss counter reset")
 
-    # ── Kaitse 1: Pause streak
+    # Kaitse 1: Loss streak paus
     paused_until = risk_state.get("paused_until")
     if paused_until:
         pause_dt = datetime.fromisoformat(paused_until)
@@ -173,18 +168,18 @@ def check_risk_limits() -> tuple[bool, str]:
             save_risk_state(risk_state)
             add_log("✅ Loss streak pause lifted")
 
-    # ── Kaitse 2: Daily loss limit
-    daily_loss = abs(float(risk_state.get("daily_loss", 0)))
+    # Kaitse 2: Daily loss limit
+    daily_loss     = abs(float(risk_state.get("daily_loss", 0)))
     daily_loss_pct = (daily_loss / _BALANCE_DEFAULT) * 100
     if daily_loss_pct >= MAX_DAILY_LOSS_PCT:
         return False, f"Daily loss limit {daily_loss_pct:.1f}% >= {MAX_DAILY_LOSS_PCT}% — waiting for reset"
 
-    # ── Kaitse 3: Max drawdown — päevane paus, reset kell 00:00 UTC
+    # Kaitse 3: Max drawdown — päevane paus
     drawdown_pct = (1 - balance / _BALANCE_DEFAULT) * 100
     if drawdown_pct >= MAX_DRAWDOWN_PCT:
         return False, f"Max drawdown {drawdown_pct:.1f}% >= {MAX_DRAWDOWN_PCT}% — paused until {today} 00:00 UTC reset"
 
-    # ── Kaitse 4: Max open signals
+    # Kaitse 4: Max open signals
     open_signals = sb_select("signals", "executed=eq.false&select=id")
     if len(open_signals) >= MAX_OPEN_SIGNALS:
         return False, f"Max open signals ({MAX_OPEN_SIGNALS}) reached — waiting for close"
@@ -192,17 +187,14 @@ def check_risk_limits() -> tuple[bool, str]:
     return True, ""
 
 def update_risk_after_trade(pnl_eur: float):
-    """Uuendab risk state pärast tehingu sulgemist."""
     risk_state = get_risk_state()
     now        = datetime.now(timezone.utc)
 
     if pnl_eur < 0:
-        # Kahjum
         risk_state["daily_loss"]  = float(risk_state.get("daily_loss", 0)) + abs(pnl_eur)
         risk_state["loss_streak"] = int(risk_state.get("loss_streak", 0)) + 1
         streak = risk_state["loss_streak"]
         add_log(f"📉 Loss streak: {streak}/{MAX_LOSS_STREAK}")
-
         if streak >= MAX_LOSS_STREAK:
             pause_until = (now + timedelta(hours=24)).isoformat()
             risk_state["paused_until"] = pause_until
@@ -213,7 +205,6 @@ def update_risk_after_trade(pnl_eur: float):
                 f"Kauplemisel paus kuni: {pause_until[:16]} UTC"
             )
     else:
-        # Kasum — reset streak
         risk_state["loss_streak"] = 0
 
     save_risk_state(risk_state)
@@ -235,7 +226,6 @@ def check_high_impact_news():
         h = now.hour
         m = now.minute
         wd = now.weekday()
-
         if wd == 4 and now.day <= 7:
             if 10 <= h <= 14:
                 return True, "NFP Friday — high volatility window"
@@ -245,7 +235,6 @@ def check_high_impact_news():
             return True, "Potential CPI window — avoiding signal"
         if 13 <= h < 14 and m < 30:
             return True, "US market open — high spread window"
-
         return False, ""
     except Exception as e:
         logger.error(f"Calendar check error: {e}")
@@ -357,32 +346,25 @@ def add_indicators(df):
     k = df['close'].rolling(14).apply(lambda x:(x.iloc[-1]-x.min())/(x.max()-x.min()+1e-10)*100, raw=False)
     df["stoch_k"] = k.rolling(3).mean()
     df["stoch_d"] = df["stoch_k"].rolling(3).mean()
-    df["vol_ma"] = df["volume"].rolling(20).mean()
+    df["vol_ma"]  = df["volume"].rolling(20).mean()
     df["vol_ratio"] = df["volume"] / (df["vol_ma"] + 1e-10)
     return df
 
 def detect_candle_pattern(df):
     if len(df) < 3: return None, 0
-    c = df.iloc[-1]
-    p = df.iloc[-2]
-    pp = df.iloc[-3]
+    c = df.iloc[-1]; p = df.iloc[-2]; pp = df.iloc[-3]
     body = abs(c.close - c.open)
     full = c.high - c.low + 1e-10
     upper_wick = c.high - max(c.close, c.open)
     lower_wick = min(c.close, c.open) - c.low
     body_ratio = body / full
     if c.close > c.open and p.close < p.open:
-        if c.open < p.close and c.close > p.open:
-            return "bullish_engulfing", 15
+        if c.open < p.close and c.close > p.open: return "bullish_engulfing", 15
     if c.close < c.open and p.close > p.open:
-        if c.open > p.close and c.close < p.open:
-            return "bearish_engulfing", 15
-    if lower_wick > body * 2 and lower_wick > upper_wick * 2 and body_ratio < 0.4:
-        return "bullish_pinbar", 12
-    if upper_wick > body * 2 and upper_wick > lower_wick * 2 and body_ratio < 0.4:
-        return "bearish_pinbar", 12
-    if c.high < p.high and c.low > p.low:
-        return "inside_bar", 5
+        if c.open > p.close and c.close < p.open: return "bearish_engulfing", 15
+    if lower_wick > body*2 and lower_wick > upper_wick*2 and body_ratio < 0.4: return "bullish_pinbar", 12
+    if upper_wick > body*2 and upper_wick > lower_wick*2 and body_ratio < 0.4: return "bearish_pinbar", 12
+    if c.high < p.high and c.low > p.low: return "inside_bar", 5
     return None, 0
 
 def get_regime(df):
@@ -447,6 +429,9 @@ TF_WEIGHTS = {"15m":0.10,"30m":0.20,"1h":0.30,"4h":0.40}
 MIN_SCORE  = 55
 ATR_SL     = 1.3
 ATR_TP     = 2.6
+
+# ── FIX 3: Signaal aegub 8h pärast — Telegram teade
+SIGNAL_EXPIRY_HOURS = 8
 
 def get_session():
     h = datetime.now(timezone.utc).hour
@@ -518,12 +503,9 @@ def score_signal(direction, df, mtf_str, regime, dxy_bias):
             score -= 8; reasons.append("DXY falling — bullish gold -8")
 
     vol_ratio = float(last.vol_ratio) if "vol_ratio" in df.columns else 1.0
-    if vol_ratio > 1.5:
-        score += 10; reasons.append(f"High volume +10")
-    elif vol_ratio > 1.2:
-        score += 5; reasons.append(f"Above avg volume +5")
-    elif vol_ratio < 0.7:
-        score -= 5; reasons.append(f"Low volume -5")
+    if vol_ratio > 1.5: score += 10; reasons.append(f"High volume +10")
+    elif vol_ratio > 1.2: score += 5; reasons.append(f"Above avg volume +5")
+    elif vol_ratio < 0.7: score -= 5; reasons.append(f"Low volume -5")
 
     pattern, pat_bonus = detect_candle_pattern(df)
     if pattern and pat_bonus > 0:
@@ -562,7 +544,6 @@ def generate_signal(tf_data):
         add_log(f"— No signal: {risk_reason}")
         return None
 
-    # ── Risk protection check
     can_trade, risk_reason = check_risk_limits()
     if not can_trade:
         add_log(f"🛡 Risk limit: {risk_reason}")
@@ -602,28 +583,32 @@ def generate_signal(tf_data):
 
     atr   = float(last.atr)
     price = float(last.close)
-    sl    = round(price - atr*ATR_SL if bias=="buy" else price + atr*ATR_SL, 2)
-    tp    = round(price + atr*ATR_TP if bias=="buy" else price - atr*ATR_TP, 2)
-    rr    = round(abs(tp-price)/abs(sl-price), 2)
+
+    # ── FIX 3: Lisa spread SL distantsi sisse
+    # BUY: SL on all → spread suurendab efektiivset kahjumit → lisa spread SL distantsi
+    # SELL: SL on üleval → spread lisatakse entry hinnale
+    sl = round(price - atr*ATR_SL - GOLD_SPREAD_POINTS if bias=="buy" else price + atr*ATR_SL + GOLD_SPREAD_POINTS, 2)
+    tp = round(price + atr*ATR_TP if bias=="buy" else price - atr*ATR_TP, 2)
+    rr = round(abs(tp-price)/abs(sl-price), 2)
 
     return {
-        "direction":    bias,
-        "entry":        round(price,2),
-        "sl":           sl,
-        "tp":           tp,
-        "rr":           rr,
-        "atr":          round(atr,2),
-        "score":        score,
+        "direction":     bias,
+        "entry":         round(price,2),
+        "sl":            sl,
+        "tp":            tp,
+        "rr":            rr,
+        "atr":           round(atr,2),
+        "score":         score,
         "score_reasons": reasons,
-        "regime":       regime,
-        "session":      session_name,
-        "rsi":          round(float(rsi),1),
-        "macd":         round(float(last.macd),4),
-        "adx":          round(float(last.adx),1),
-        "smc_bonus":    0,
-        "mtf_detail":   mtf_detail,
-        "dxy_bias":     dxy_bias,
-        "timestamp":    datetime.now(timezone.utc).isoformat(),
+        "regime":        regime,
+        "session":       session_name,
+        "rsi":           round(float(rsi),1),
+        "macd":          round(float(last.macd),4),
+        "adx":           round(float(last.adx),1),
+        "smc_bonus":     0,
+        "mtf_detail":    mtf_detail,
+        "dxy_bias":      dxy_bias,
+        "timestamp":     datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -637,10 +622,8 @@ def check_signal_results():
     try:
         signals = sb_select("signals", "executed=eq.false&order=created_at.desc&limit=20")
         for sig in signals:
-            created = datetime.fromisoformat(sig["created_at"].replace("Z","+00:00"))
+            created   = datetime.fromisoformat(sig["created_at"].replace("Z","+00:00"))
             age_hours = (datetime.now(timezone.utc) - created).total_seconds() / 3600
-            if age_hours < 1:
-                continue
 
             entry     = float(sig.get("entry", 0))
             tp        = float(sig.get("tp", 0))
@@ -648,6 +631,21 @@ def check_signal_results():
             atr       = float(sig.get("atr", 5.0))
             direction = sig.get("direction", "buy")
             sig_id    = sig.get("id")
+
+            # ── FIX 5: Signaal aegub SIGNAL_EXPIRY_HOURS pärast → Telegram teade + sulge
+            if age_hours >= SIGNAL_EXPIRY_HOURS:
+                sb_upsert("signals", {"id": sig_id, "executed": True})
+                add_log(f"⏰ Signal expired: {direction.upper()} @ {entry} ({age_hours:.1f}h old)")
+                send_telegram(
+                    f"⏰ <b>Signaal aegunud</b>\n"
+                    f"{direction.upper()} @ {entry}\n"
+                    f"Signaal oli avatud {age_hours:.1f}h — suletud ilma tehinguta.\n"
+                    f"TP: {tp}  |  SL: {sl}"
+                )
+                continue
+
+            if age_hours < 1:
+                continue
 
             prices = sb_select("bot_state", "id=eq.1")
             if not prices: continue
@@ -671,11 +669,11 @@ def check_signal_results():
             effective_sl = entry if breakeven else sl
 
             if direction == "buy":
-                result = "TP" if current >= tp else "SL" if current <= effective_sl else None
-                pnl_pts = abs(tp-entry) if result=="TP" else -abs(effective_sl-entry) if result=="SL" else None
+                result   = "TP" if current >= tp else "SL" if current <= effective_sl else None
+                pnl_pts  = abs(tp-entry) if result=="TP" else -abs(effective_sl-entry) if result=="SL" else None
             else:
-                result = "TP" if current <= tp else "SL" if current >= effective_sl else None
-                pnl_pts = abs(entry-tp) if result=="TP" else -abs(entry-effective_sl) if result=="SL" else None
+                result   = "TP" if current <= tp else "SL" if current >= effective_sl else None
+                pnl_pts  = abs(entry-tp) if result=="TP" else -abs(entry-effective_sl) if result=="SL" else None
 
             if result:
                 balance = get_account_balance()
@@ -697,8 +695,6 @@ def check_signal_results():
 
                 new_balance = round(balance + pnl_eur, 2)
                 sb_upsert("bot_state", {"id": 1, "balance": new_balance})
-
-                # Uuenda risk state
                 update_risk_after_trade(pnl_eur)
 
                 add_log(f"📊 Trade closed: {result}  PnL: {pnl_eur:+.2f}€  Balance: {new_balance:.2f}€")
@@ -713,10 +709,10 @@ def check_signal_results():
 def get_stats_from_supabase():
     trades = sb_select("trades","result=not.is.null&order=created_at.desc&limit=100")
     if not trades: return {"total":0}
-    wins   = [t for t in trades if t.get("result")=="TP"]
-    pnls   = [float(t.get("pnl",0) or 0) for t in trades]
-    gp     = sum(p for p in pnls if p>0)
-    gl     = abs(sum(p for p in pnls if p<0))
+    wins  = [t for t in trades if t.get("result")=="TP"]
+    pnls  = [float(t.get("pnl",0) or 0) for t in trades]
+    gp    = sum(p for p in pnls if p>0)
+    gl    = abs(sum(p for p in pnls if p<0))
     return {
         "total":         len(trades),
         "wins":          len(wins),
@@ -726,6 +722,10 @@ def get_stats_from_supabase():
     }
 
 def calc_lot(entry, sl, score):
+    """
+    Dünaamiline lot + spread arvestus.
+    SL distants on juba spread-korrigeeritud generate_signal'ist.
+    """
     balance  = get_account_balance()
     risk_pct = RISK_PER_TRADE / 100
     factor   = 1.0 + 0.3 * max(0, (score - MIN_SCORE)) / (100 - MIN_SCORE)
@@ -752,24 +752,26 @@ def send_telegram(text):
         logger.warning(f"Telegram error: {e}")
 
 def format_signal_msg(sig, lot):
-    d = sig["direction"]
-    e = "🟢" if d=="buy" else "🔴"
+    d   = sig["direction"]
+    e   = "🟢" if d=="buy" else "🔴"
     bar = "█"*(sig["score"]//10) + "░"*(10-sig["score"]//10)
     mtf = "\n".join(f"  {tf}: {v}" for tf,v in sig.get("mtf_detail",{}).items())
     dxy = sig.get("dxy_bias","neutral_dxy").replace("_dxy","").upper()
-    balance  = get_account_balance()
-    risk_eur = round(balance * RISK_PER_TRADE / 100, 2)
+    balance    = get_account_balance()
+    risk_eur   = round(balance * RISK_PER_TRADE / 100, 2)
     risk_state = get_risk_state()
-    streak   = risk_state.get("loss_streak", 0)
+    streak     = risk_state.get("loss_streak", 0)
     daily_loss = abs(float(risk_state.get("daily_loss", 0)))
+    expiry_utc = (datetime.now(timezone.utc) + timedelta(hours=SIGNAL_EXPIRY_HOURS)).strftime("%H:%M UTC")
     return (
         f"{e} <b>NEMSIS v2 — XAUUSD {'📈 BUY' if d=='buy' else '📉 SELL'}</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━\n"
         f"💰 Entry: <b>{sig['entry']}</b>\n"
-        f"🛑 SL: <b>{sig['sl']}</b>\n"
+        f"🛑 SL: <b>{sig['sl']}</b> <i>(spread incl.)</i>\n"
         f"🎯 TP: <b>{sig['tp']}</b>\n"
         f"⚖️ R:R: <b>1:{sig['rr']}</b>  |  Lot: <b>{lot}</b>\n"
         f"💼 Balance: <b>{balance:.2f}€</b>  |  Risk: <b>{risk_eur:.2f}€</b>\n"
+        f"⏰ Expires: <b>{expiry_utc}</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━\n"
         f"📊 Score: <b>{sig['score']}/100</b> [{bar}]\n"
         f"🔎 RSI:{sig['rsi']}  ADX:{sig['adx']}  ATR:{sig['atr']}\n"
@@ -791,17 +793,15 @@ def fetch_gold_news():
         r = requests.get(url, timeout=15)
         data = r.json()
         articles = data.get("articles", [])
-        if not articles:
-            return [], ""
+        if not articles: return [], ""
         bull_kw = ["rise","rally","surge","gain","jump","high","bullish","strong","increase","support"]
         bear_kw = ["fall","drop","decline","crash","low","bearish","weak","decrease","pressure","sell"]
-        news_out = []
-        headlines = []
+        news_out = []; headlines = []
         for a in articles[:6]:
             t = (a.get("title","") + " " + a.get("description","")).lower()
-            bs = sum(1 for k in bull_kw if k in t)
+            bs  = sum(1 for k in bull_kw if k in t)
             brs = sum(1 for k in bear_kw if k in t)
-            s = "bull" if bs > brs else "bear" if brs > bs else "neutral"
+            s   = "bull" if bs > brs else "bear" if brs > bs else "neutral"
             mins = int((datetime.now(timezone.utc) - datetime.fromisoformat(a["publishedAt"].replace("Z","+00:00"))).total_seconds() / 60)
             news_out.append({"title": a.get("title",""), "sentiment": s, "mins_ago": mins, "url": a.get("url","")})
             headlines.append(a.get("title",""))
@@ -809,7 +809,6 @@ def fetch_gold_news():
     except Exception as e:
         logger.error(f"News fetch error: {e}")
         return [], ""
-
 
 def run_ai_analysis(headlines, tf_data=None):
     if not CLAUDE_KEY:
@@ -821,35 +820,26 @@ def run_ai_analysis(headlines, tf_data=None):
             for tf, df in tf_data.items():
                 if df is None or len(df) < 50: continue
                 d = add_indicators(df)
-                last = d.iloc[-1]
-                rsi = float(last.rsi)
-                macd = float(last.macd)
-                msig = float(last.macd_sig)
+                last  = d.iloc[-1]
+                rsi   = float(last.rsi)
+                macd  = float(last.macd)
+                msig  = float(last.macd_sig)
                 ema20 = float(last.ema20)
                 ema50 = float(last.ema50)
-                adx = float(last.adx)
+                adx   = float(last.adx)
                 stoch = float(last.stoch_k) if hasattr(last, "stoch_k") else 50.0
                 bb_pos = float((last.close - last.bb_lo) / (last.bb_up - last.bb_lo + 0.001) * 100)
                 def cell_class(v, typ):
-                    if typ == "rsi":
-                        if v < 35: return "sb"
-                        if v < 45: return "b"
-                        if v > 65: return "sbr"
-                        if v > 55: return "br"
+                    if typ=="rsi":
+                        if v<35: return "sb"
+                        if v<45: return "b"
+                        if v>65: return "sbr"
+                        if v>55: return "br"
                         return "n"
-                    if typ == "bool": return "b" if v else "br"
-                    if typ == "adx":
-                        if v > 35: return "sb"
-                        if v > 22: return "b"
-                        return "n"
-                    if typ == "bb":
-                        if v < 20: return "b"
-                        if v > 80: return "br"
-                        return "n"
-                    if typ == "stoch":
-                        if v < 25: return "b"
-                        if v > 75: return "br"
-                        return "n"
+                    if typ=="bool": return "b" if v else "br"
+                    if typ=="adx": return "sb" if v>35 else "b" if v>22 else "n"
+                    if typ=="bb":  return "b" if v<20 else "br" if v>80 else "n"
+                    if typ=="stoch": return "b" if v<25 else "br" if v>75 else "n"
                     return "n"
                 heatmap[tf] = {
                     "RSI":   cell_class(rsi, "rsi"),
@@ -859,9 +849,9 @@ def run_ai_analysis(headlines, tf_data=None):
                     "BB":    cell_class(bb_pos, "bb"),
                     "STOCH": cell_class(stoch, "stoch"),
                 }
-        bull_c = sum(1 for tf in heatmap.values() for v in tf.values() if v in ("sb","b"))
-        bear_c = sum(1 for tf in heatmap.values() for v in tf.values() if v in ("sbr","br"))
-        total  = bull_c + bear_c + 1
+        bull_c   = sum(1 for tf in heatmap.values() for v in tf.values() if v in ("sb","b"))
+        bear_c   = sum(1 for tf in heatmap.values() for v in tf.values() if v in ("sbr","br"))
+        total    = bull_c + bear_c + 1
         bull_pct = round(bull_c / total * 100)
         bear_pct = round(bear_c / total * 100)
         prompt = f"""You are an elite XAUUSD gold trader. Analyze this market data and give a brief outlook.
@@ -878,8 +868,8 @@ Respond ONLY in this JSON format, nothing else:
 
         resp = requests.post(
             "https://api.anthropic.com/v1/messages",
-            headers={"Content-Type": "application/json", "x-api-key": CLAUDE_KEY, "anthropic-version": "2023-06-01"},
-            json={"model": "claude-haiku-4-5-20251001", "max_tokens": 200, "messages": [{"role": "user", "content": prompt}]},
+            headers={"Content-Type":"application/json","x-api-key":CLAUDE_KEY,"anthropic-version":"2023-06-01"},
+            json={"model":"claude-haiku-4-5-20251001","max_tokens":200,"messages":[{"role":"user","content":prompt}]},
             timeout=20
         )
         data = resp.json()
@@ -887,7 +877,7 @@ Respond ONLY in this JSON format, nothing else:
         try:
             analysis = json.loads(text.replace("","").strip())
         except Exception:
-            analysis = {"verdict": "NEUTRAL", "confidence": 50, "summary": text[:200] or "Analysis unavailable.", "key_factor": "No data"}
+            analysis = {"verdict":"NEUTRAL","confidence":50,"summary":text[:200] or "Analysis unavailable.","key_factor":"No data"}
         analysis["bull_pct"]     = bull_pct
         analysis["bear_pct"]     = bear_pct
         analysis["heatmap_data"] = heatmap
@@ -896,12 +886,10 @@ Respond ONLY in this JSON format, nothing else:
         logger.error(f"AI analysis error: {e}")
         return None
 
-
 def run_market_analysis(tf_data=None):
     global _last_analysis
     now = time.time()
-    if now - _last_analysis < ANALYSIS_INTERVAL:
-        return
+    if now - _last_analysis < ANALYSIS_INTERVAL: return
     add_log("📰 Running market analysis...")
     news, headlines = fetch_gold_news()
     analysis = run_ai_analysis(headlines, tf_data)
@@ -911,42 +899,42 @@ def run_market_analysis(tf_data=None):
             for tf, df in tf_data.items():
                 if df is None or len(df) < 50: continue
                 d = add_indicators(df)
-                last = d.iloc[-1]
-                rsi = float(last.rsi)
-                macd = float(last.macd)
-                msig = float(last.macd_sig)
+                last  = d.iloc[-1]
+                rsi   = float(last.rsi)
+                macd  = float(last.macd)
+                msig  = float(last.macd_sig)
                 ema20 = float(last.ema20)
                 ema50 = float(last.ema50)
-                adx = float(last.adx)
+                adx   = float(last.adx)
                 stoch = float(last.stoch_k) if "stoch_k" in d.columns else 50.0
                 bb_pos = float((last.close - last.bb_lo) / (last.bb_up - last.bb_lo + 0.001) * 100)
                 def cc(v, t):
                     if t=="rsi": return "sb" if v<35 else "b" if v<45 else "sbr" if v>65 else "br" if v>55 else "n"
                     if t=="bool": return "b" if v else "br"
                     if t=="adx": return "sb" if v>35 else "b" if v>22 else "n"
-                    if t=="bb": return "b" if v<20 else "br" if v>80 else "n"
+                    if t=="bb":  return "b" if v<20 else "br" if v>80 else "n"
                     if t=="stoch": return "b" if v<25 else "br" if v>75 else "n"
                     return "n"
-                heatmap[tf] = {"RSI": cc(rsi,"rsi"), "MACD": cc(macd>msig,"bool"), "EMA": cc(ema20>ema50,"bool"), "ADX": cc(adx,"adx"), "BB": cc(bb_pos,"bb"), "STOCH": cc(stoch,"stoch")}
+                heatmap[tf] = {"RSI":cc(rsi,"rsi"),"MACD":cc(macd>msig,"bool"),"EMA":cc(ema20>ema50,"bool"),"ADX":cc(adx,"adx"),"BB":cc(bb_pos,"bb"),"STOCH":cc(stoch,"stoch")}
         bull_c = sum(1 for tf in heatmap.values() for v in tf.values() if v in ("sb","b"))
         bear_c = sum(1 for tf in heatmap.values() for v in tf.values() if v in ("sbr","br"))
-        total = bull_c + bear_c + 1
-        analysis = {"verdict": "NEUTRAL", "confidence": 50,
-                    "summary": "AI analysis unavailable — set CLAUDE_KEY in Railway Variables.",
-                    "key_factor": "No API key",
-                    "bull_pct": round(bull_c/total*100),
-                    "bear_pct": round(bear_c/total*100),
-                    "heatmap_data": heatmap}
+        total  = bull_c + bear_c + 1
+        analysis = {"verdict":"NEUTRAL","confidence":50,
+                    "summary":"AI analysis unavailable — set CLAUDE_KEY in Railway Variables.",
+                    "key_factor":"No API key",
+                    "bull_pct":round(bull_c/total*100),
+                    "bear_pct":round(bear_c/total*100),
+                    "heatmap_data":heatmap}
     sb_upsert("market_analysis", {
         "id":           1,
         "updated_at":   datetime.now(timezone.utc).isoformat(),
-        "verdict":      analysis.get("verdict", "NEUTRAL"),
-        "confidence":   analysis.get("confidence", 50),
-        "summary":      analysis.get("summary", ""),
-        "key_factor":   analysis.get("key_factor", ""),
-        "bull_pct":     analysis.get("bull_pct", 50),
-        "bear_pct":     analysis.get("bear_pct", 50),
-        "heatmap_data": analysis.get("heatmap_data", {}),
+        "verdict":      analysis.get("verdict","NEUTRAL"),
+        "confidence":   analysis.get("confidence",50),
+        "summary":      analysis.get("summary",""),
+        "key_factor":   analysis.get("key_factor",""),
+        "bull_pct":     analysis.get("bull_pct",50),
+        "bear_pct":     analysis.get("bear_pct",50),
+        "heatmap_data": analysis.get("heatmap_data",{}),
         "news":         news,
     })
     _last_analysis = now
@@ -962,11 +950,13 @@ def main():
     balance = get_account_balance()
     add_log(f"💼 Starting balance: {balance:.2f}€")
     add_log(f"🛡 Risk limits: daily={MAX_DAILY_LOSS_PCT}%  drawdown={MAX_DRAWDOWN_PCT}%  max_open={MAX_OPEN_SIGNALS}  streak={MAX_LOSS_STREAK}")
+    add_log(f"📏 Spread: {GOLD_SPREAD_POINTS} pts  |  Signal expiry: {SIGNAL_EXPIRY_HOURS}h")
     send_telegram(
         f"🚀 <b>NEMSIS v2</b> — Cloud bot started\n"
         f"Signal-only mode | XAUUSD\n"
         f"💼 Balance: <b>{balance:.2f}€</b>\n"
-        f"🛡 Daily loss limit: <b>{MAX_DAILY_LOSS_PCT}%</b>  |  Max drawdown: <b>{MAX_DRAWDOWN_PCT}%</b>"
+        f"🛡 Daily loss: <b>{MAX_DAILY_LOSS_PCT}%</b>  |  Drawdown: <b>{MAX_DRAWDOWN_PCT}%</b>\n"
+        f"⏰ Signal expiry: <b>{SIGNAL_EXPIRY_HOURS}h</b>"
     )
 
     rows = sb_select("bot_state", "id=eq.1&select=balance")
@@ -977,13 +967,13 @@ def main():
         try:
             add_log("⏱ Scanning...")
 
-            bid, ask  = get_price()
-            tf_data   = load_mtf()
+            bid, ask   = get_price()
+            tf_data    = load_mtf()
             run_market_analysis(tf_data)
             check_signal_results()
-            sig       = generate_signal(tf_data)
-            stats     = get_stats_from_supabase()
-            balance   = get_account_balance()
+            sig        = generate_signal(tf_data)
+            stats      = get_stats_from_supabase()
+            balance    = get_account_balance()
             risk_state = get_risk_state()
 
             drawdown_pct = round((1 - balance / _BALANCE_DEFAULT) * 100, 1) if balance < _BALANCE_DEFAULT else 0.0
@@ -997,8 +987,10 @@ def main():
                 "daily_pnl":      stats.get("net_pnl", 0),
                 "drawdown_pct":   drawdown_pct,
                 "daily_loss_pct": round(daily_loss / _BALANCE_DEFAULT * 100, 1),
+                "daily_loss_eur": round(daily_loss, 2),
                 "loss_streak":    loss_streak,
                 "paused":         paused,
+                "spread":         GOLD_SPREAD_POINTS,
             }
 
             sb_upsert("bot_state", {
@@ -1016,7 +1008,6 @@ def main():
             if sig:
                 lot = calc_lot(sig["entry"], sig["sl"], sig["score"])
                 add_log(f"🔔 SIGNAL {sig['direction'].upper()} @ {sig['entry']}  score:{sig['score']}  lot:{lot}  balance:{balance:.2f}€")
-
                 sb_insert("signals", {
                     "direction":     sig["direction"],
                     "entry":         sig["entry"],
@@ -1036,7 +1027,6 @@ def main():
                     "executed":      False,
                     "breakeven":     False,
                 })
-
                 send_telegram(format_signal_msg(sig, lot))
             else:
                 add_log("— No signal this cycle")
