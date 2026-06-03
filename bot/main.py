@@ -46,7 +46,7 @@ def add_log(msg):
 
 
 # ─────────────────────────────────────────────────────────
-#  SUPABASE CLIENT  (raw REST, no extra library needed)
+#  SUPABASE CLIENT
 # ─────────────────────────────────────────────────────────
 
 def sb_headers():
@@ -96,7 +96,87 @@ def sb_select(table: str, params: str = "") -> list:
 
 
 # ─────────────────────────────────────────────────────────
-#  INDICATORS  (self-contained, no local imports needed)
+#  ECONOMIC CALENDAR FILTER
+# ─────────────────────────────────────────────────────────
+
+# High impact events that affect gold — hardcoded schedule check
+HIGH_IMPACT_KEYWORDS = [
+    "fed", "fomc", "federal reserve", "interest rate", "rate decision",
+    "cpi", "inflation", "nfp", "non-farm", "payroll", "gdp",
+    "powell", "unemployment", "pce"
+]
+
+def check_high_impact_news():
+    """
+    Check if there are high-impact economic events in the next 2 hours.
+    Uses a simple time-based check for known recurring events.
+    Returns (bool: is_risky, str: reason)
+    """
+    try:
+        now = datetime.now(timezone.utc)
+        h = now.hour
+        m = now.minute
+        wd = now.weekday()  # 0=Mon, 4=Fri
+
+        # NFP — first Friday of month, 12:30 UTC (±2h window)
+        if wd == 4 and now.day <= 7:
+            if 10 <= h <= 14:
+                return True, "NFP Friday — high volatility window"
+
+        # FOMC meetings — typically Wed 18:00 UTC (±2h)
+        if wd == 2 and 16 <= h <= 20:
+            return True, "Potential FOMC window — avoiding signal"
+
+        # CPI release — typically 2nd week Tue/Wed 12:30 UTC
+        if wd in [1, 2] and 7 <= now.day <= 14 and 12 <= h <= 14:
+            return True, "Potential CPI window — avoiding signal"
+
+        # US market open volatility — 13:30-14:00 UTC (avoid first 30min)
+        if 13 <= h < 14 and m < 30:
+            return True, "US market open — high spread window"
+
+        return False, ""
+    except Exception as e:
+        logger.error(f"Calendar check error: {e}")
+        return False, ""
+
+
+# ─────────────────────────────────────────────────────────
+#  DXY CORRELATION FILTER
+# ─────────────────────────────────────────────────────────
+
+def get_dxy_bias():
+    """
+    Get DXY (US Dollar Index) trend using yfinance.
+    Gold and DXY are negatively correlated — rising DXY = bearish gold.
+    Returns: "bullish_dxy", "bearish_dxy", or "neutral_dxy"
+    """
+    try:
+        import yfinance as yf
+        df = yf.Ticker("DX-Y.NYB").history(interval="1h", period="3d", auto_adjust=True)
+        if df is None or df.empty or len(df) < 10:
+            return "neutral_dxy"
+        df.columns = [c.lower() for c in df.columns]
+        closes = df["close"].dropna()
+        if len(closes) < 10:
+            return "neutral_dxy"
+        ema10 = closes.ewm(span=10, adjust=False).mean().iloc[-1]
+        ema20 = closes.ewm(span=20, adjust=False).mean().iloc[-1]
+        last  = float(closes.iloc[-1])
+        change_pct = (last - float(closes.iloc[-6])) / float(closes.iloc[-6]) * 100
+
+        if ema10 > ema20 and change_pct > 0.15:
+            return "bullish_dxy"   # DXY rising = bearish for gold
+        elif ema10 < ema20 and change_pct < -0.15:
+            return "bearish_dxy"   # DXY falling = bullish for gold
+        return "neutral_dxy"
+    except Exception as e:
+        logger.error(f"DXY fetch error: {e}")
+        return "neutral_dxy"
+
+
+# ─────────────────────────────────────────────────────────
+#  INDICATORS
 # ─────────────────────────────────────────────────────────
 
 def calc_rsi(s, p=14):
@@ -187,28 +267,18 @@ def detect_candle_pattern(df):
     lower_wick = min(c.close, c.open) - c.low
     body_ratio = body / full
 
-    # Bullish engulfing
     if c.close > c.open and p.close < p.open:
         if c.open < p.close and c.close > p.open:
             return "bullish_engulfing", 15
-
-    # Bearish engulfing
     if c.close < c.open and p.close > p.open:
         if c.open > p.close and c.close < p.open:
             return "bearish_engulfing", 15
-
-    # Bullish pin bar
     if lower_wick > body * 2 and lower_wick > upper_wick * 2 and body_ratio < 0.4:
         return "bullish_pinbar", 12
-
-    # Bearish pin bar
     if upper_wick > body * 2 and upper_wick > lower_wick * 2 and body_ratio < 0.4:
         return "bearish_pinbar", 12
-
-    # Inside bar breakout
     if c.high < p.high and c.low > p.low:
         return "inside_bar", 5
-
     return None, 0
 
 def get_regime(df):
@@ -275,7 +345,6 @@ ATR_SL     = 1.3
 ATR_TP     = 2.6
 
 def get_session():
-    from datetime import datetime, timezone
     h = datetime.now(timezone.utc).hour
     wd = datetime.now(timezone.utc).weekday()
     if wd >= 5: return None, "weekend"
@@ -308,7 +377,7 @@ def get_mtf_bias(tf_data):
     if brn>=0.4: return "sell",brn,detail
     return "neutral",max(bn,brn),detail
 
-def score_signal(direction, df, mtf_str, regime):
+def score_signal(direction, df, mtf_str, regime, dxy_bias):
     score = 0; reasons = []
     last = df.iloc[-1]
     rsi,macd,msig = last.rsi,last.macd,last.macd_sig
@@ -326,6 +395,11 @@ def score_signal(direction, df, mtf_str, regime):
         elif sk<40: score+=5; reasons.append("StochRSI low +5")
         if c<bblo: score+=10; reasons.append("Below BB lower +10")
         elif c<last.bb_mid: score+=5; reasons.append("Below BB mid +5")
+        # DXY bonus for BUY — falling dollar = good for gold
+        if dxy_bias == "bearish_dxy":
+            score += 10; reasons.append("DXY falling — bullish gold +10")
+        elif dxy_bias == "bullish_dxy":
+            score -= 8; reasons.append("DXY rising — bearish gold -8")
     else:
         if rsi>58:
             p=int((rsi-58)/(100-58)*20); score+=p; reasons.append(f"RSI overbought {rsi:.1f} +{p}")
@@ -335,6 +409,11 @@ def score_signal(direction, df, mtf_str, regime):
         elif sk>60: score+=5; reasons.append("StochRSI high +5")
         if c>bbu: score+=10; reasons.append("Above BB upper +10")
         elif c>last.bb_mid: score+=5; reasons.append("Above BB mid +5")
+        # DXY bonus for SELL — rising dollar = good for sell gold
+        if dxy_bias == "bullish_dxy":
+            score += 10; reasons.append("DXY rising — bearish gold +10")
+        elif dxy_bias == "bearish_dxy":
+            score -= 8; reasons.append("DXY falling — bullish gold -8")
 
     vol_ratio = float(last.vol_ratio) if "vol_ratio" in df.columns else 1.0
     if vol_ratio > 1.5:
@@ -367,12 +446,19 @@ def score_signal(direction, df, mtf_str, regime):
             score += sr_bonus; reasons.append(f"Near support +{sr_bonus}")
         elif direction=="sell" and sr_above:
             score += sr_bonus; reasons.append(f"Near resistance +{sr_bonus}")
+
     return max(0,min(100,score)), reasons
 
 def generate_signal(tf_data):
     in_session, session_name = get_session()
     if not in_session:
         add_log(f"— No signal: {session_name}")
+        return None
+
+    # Economic calendar filter
+    is_risky, risk_reason = check_high_impact_news()
+    if is_risky:
+        add_log(f"— No signal: {risk_reason}")
         return None
 
     df = tf_data.get("1h")
@@ -396,7 +482,12 @@ def generate_signal(tf_data):
     if bias=="buy" and rsi>72: add_log(f"— No signal: RSI {rsi:.1f} too high"); return None
     if bias=="sell" and rsi<28: add_log(f"— No signal: RSI {rsi:.1f} too low"); return None
 
-    score, reasons = score_signal(bias, df, mtf_str, regime)
+    # Get DXY bias
+    dxy_bias = get_dxy_bias()
+    if dxy_bias != "neutral_dxy":
+        add_log(f"📊 DXY: {dxy_bias}")
+
+    score, reasons = score_signal(bias, df, mtf_str, regime, dxy_bias)
     if score < MIN_SCORE:
         add_log(f"— No signal: score {score} < {MIN_SCORE}")
         return None
@@ -423,12 +514,13 @@ def generate_signal(tf_data):
         "adx":          round(float(last.adx),1),
         "smc_bonus":    0,
         "mtf_detail":   mtf_detail,
+        "dxy_bias":     dxy_bias,
         "timestamp":    datetime.now(timezone.utc).isoformat(),
     }
 
 
 # ─────────────────────────────────────────────────────────
-#  RISK STATE  (simple, stored in Supabase)
+#  RISK STATE
 # ─────────────────────────────────────────────────────────
 
 RISK_PER_TRADE = 1.0
@@ -436,7 +528,6 @@ ACCOUNT_BALANCE = float(os.environ.get("ACCOUNT_BALANCE","10000"))
 
 def check_signal_results():
     try:
-        from datetime import timedelta
         signals = sb_select("signals", "executed=eq.false&order=created_at.desc&limit=20")
         for sig in signals:
             created = datetime.fromisoformat(sig["created_at"].replace("Z","+00:00"))
@@ -517,6 +608,7 @@ def format_signal_msg(sig, lot):
     e = "🟢" if d=="buy" else "🔴"
     bar = "█"*(sig["score"]//10) + "░"*(10-sig["score"]//10)
     mtf = "\n".join(f"  {tf}: {v}" for tf,v in sig.get("mtf_detail",{}).items())
+    dxy = sig.get("dxy_bias","neutral_dxy").replace("_dxy","").upper()
     return (
         f"{e} <b>NEMSIS v2 — XAUUSD {'📈 BUY' if d=='buy' else '📉 SELL'}</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━\n"
@@ -527,6 +619,7 @@ def format_signal_msg(sig, lot):
         f"━━━━━━━━━━━━━━━━━━━━━\n"
         f"📊 Score: <b>{sig['score']}/100</b> [{bar}]\n"
         f"🔎 RSI:{sig['rsi']}  ADX:{sig['adx']}  ATR:{sig['atr']}\n"
+        f"💵 DXY: <b>{dxy}</b>\n"
         f"🌍 {sig['regime']} · {sig['session']}\n"
         f"━━━━━━━━━━━━━━━━━━━━━\n"
         f"📐 MTF:\n{mtf}"
@@ -534,11 +627,10 @@ def format_signal_msg(sig, lot):
 
 
 # ─────────────────────────────────────────────────────────
-#  MARKET ANALYSIS (news + AI) — runs every 30 min
+#  MARKET ANALYSIS
 # ─────────────────────────────────────────────────────────
 
 def fetch_gold_news():
-    """Fetch latest gold news from GNews API."""
     try:
         url = f"https://gnews.io/api/v4/search?q=gold+XAUUSD+price&lang=en&max=6&token={GNEWS_KEY}"
         r = requests.get(url, timeout=15)
@@ -573,7 +665,6 @@ def fetch_gold_news():
 
 
 def run_ai_analysis(headlines, tf_data=None):
-    """Run Claude AI analysis on gold news headlines."""
     if not CLAUDE_KEY:
         logger.warning("CLAUDE_KEY not set — skipping AI analysis")
         return None
@@ -678,7 +769,6 @@ Respond ONLY in this JSON format, nothing else:
 
 
 def run_market_analysis(tf_data=None):
-    """Fetch news + run AI analysis + push to Supabase."""
     global _last_analysis
     now = time.time()
 
@@ -737,6 +827,7 @@ def run_market_analysis(tf_data=None):
 
     _last_analysis = now
     add_log(f"✅ Analysis: {analysis.get('verdict')} ({analysis.get('confidence')}% confidence)")
+
 
 # ─────────────────────────────────────────────────────────
 #  MAIN LOOP
