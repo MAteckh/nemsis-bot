@@ -179,10 +179,10 @@ def check_risk_limits() -> tuple[bool, str]:
     if daily_loss_pct >= MAX_DAILY_LOSS_PCT:
         return False, f"Daily loss limit {daily_loss_pct:.1f}% >= {MAX_DAILY_LOSS_PCT}% — waiting for reset"
 
-    # ── Kaitse 3: Max drawdown
+    # ── Kaitse 3: Max drawdown — päevane paus, reset kell 00:00 UTC
     drawdown_pct = (1 - balance / _BALANCE_DEFAULT) * 100
     if drawdown_pct >= MAX_DRAWDOWN_PCT:
-        return False, f"Max drawdown {drawdown_pct:.1f}% >= {MAX_DRAWDOWN_PCT}% — trading stopped"
+        return False, f"Max drawdown {drawdown_pct:.1f}% >= {MAX_DRAWDOWN_PCT}% — paused until {today} 00:00 UTC reset"
 
     # ── Kaitse 4: Max open signals
     open_signals = sb_select("signals", "executed=eq.false&select=id")
