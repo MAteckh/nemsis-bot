@@ -96,10 +96,33 @@ def sb_select(table: str, params: str = "") -> list:
 
 
 # ─────────────────────────────────────────────────────────
+#  DYNAMIC BALANCE — loeb Supabase'ist, Railway on fallback
+# ─────────────────────────────────────────────────────────
+
+_BALANCE_DEFAULT = float(os.environ.get("ACCOUNT_BALANCE", "100"))
+
+def get_account_balance() -> float:
+    """
+    Loeb balance Supabase bot_state tabelist (id=1, väli 'balance').
+    Kui pole seatud, kasutab Railway ACCOUNT_BALANCE muutujat.
+    Kasumiga kasvab automaatselt — uuenda bot_state.balance käsitsi
+    või lase check_signal_results() seda teha.
+    """
+    try:
+        rows = sb_select("bot_state", "id=eq.1&select=balance")
+        if rows and rows[0].get("balance"):
+            bal = float(rows[0]["balance"])
+            if bal > 0:
+                return bal
+    except Exception as e:
+        logger.warning(f"Balance fetch error: {e}")
+    return _BALANCE_DEFAULT
+
+
+# ─────────────────────────────────────────────────────────
 #  ECONOMIC CALENDAR FILTER
 # ─────────────────────────────────────────────────────────
 
-# High impact events that affect gold — hardcoded schedule check
 HIGH_IMPACT_KEYWORDS = [
     "fed", "fomc", "federal reserve", "interest rate", "rate decision",
     "cpi", "inflation", "nfp", "non-farm", "payroll", "gdp",
@@ -107,31 +130,22 @@ HIGH_IMPACT_KEYWORDS = [
 ]
 
 def check_high_impact_news():
-    """
-    Check if there are high-impact economic events in the next 2 hours.
-    Uses a simple time-based check for known recurring events.
-    Returns (bool: is_risky, str: reason)
-    """
     try:
         now = datetime.now(timezone.utc)
         h = now.hour
         m = now.minute
         wd = now.weekday()  # 0=Mon, 4=Fri
 
-        # NFP — first Friday of month, 12:30 UTC (±2h window)
         if wd == 4 and now.day <= 7:
             if 10 <= h <= 14:
                 return True, "NFP Friday — high volatility window"
 
-        # FOMC meetings — typically Wed 18:00 UTC (±2h)
         if wd == 2 and 16 <= h <= 20:
             return True, "Potential FOMC window — avoiding signal"
 
-        # CPI release — typically 2nd week Tue/Wed 12:30 UTC
         if wd in [1, 2] and 7 <= now.day <= 14 and 12 <= h <= 14:
             return True, "Potential CPI window — avoiding signal"
 
-        # US market open volatility — 13:30-14:00 UTC (avoid first 30min)
         if 13 <= h < 14 and m < 30:
             return True, "US market open — high spread window"
 
@@ -146,11 +160,6 @@ def check_high_impact_news():
 # ─────────────────────────────────────────────────────────
 
 def get_dxy_bias():
-    """
-    Get DXY (US Dollar Index) trend using yfinance.
-    Gold and DXY are negatively correlated — rising DXY = bearish gold.
-    Returns: "bullish_dxy", "bearish_dxy", or "neutral_dxy"
-    """
     try:
         import yfinance as yf
         df = yf.Ticker("DX-Y.NYB").history(interval="1h", period="3d", auto_adjust=True)
@@ -166,9 +175,9 @@ def get_dxy_bias():
         change_pct = (last - float(closes.iloc[-6])) / float(closes.iloc[-6]) * 100
 
         if ema10 > ema20 and change_pct > 0.15:
-            return "bullish_dxy"   # DXY rising = bearish for gold
+            return "bullish_dxy"
         elif ema10 < ema20 and change_pct < -0.15:
-            return "bearish_dxy"   # DXY falling = bullish for gold
+            return "bearish_dxy"
         return "neutral_dxy"
     except Exception as e:
         logger.error(f"DXY fetch error: {e}")
@@ -340,7 +349,7 @@ def get_price():
 # ─────────────────────────────────────────────────────────
 
 TF_WEIGHTS = {"15m":0.10,"30m":0.20,"1h":0.30,"4h":0.40}
-MIN_SCORE  = 45
+MIN_SCORE  = 55   # tõsteti 45 → 55
 ATR_SL     = 1.3
 ATR_TP     = 2.6
 
@@ -395,7 +404,6 @@ def score_signal(direction, df, mtf_str, regime, dxy_bias):
         elif sk<40: score+=5; reasons.append("StochRSI low +5")
         if c<bblo: score+=10; reasons.append("Below BB lower +10")
         elif c<last.bb_mid: score+=5; reasons.append("Below BB mid +5")
-        # DXY bonus for BUY — falling dollar = good for gold
         if dxy_bias == "bearish_dxy":
             score += 10; reasons.append("DXY falling — bullish gold +10")
         elif dxy_bias == "bullish_dxy":
@@ -409,7 +417,6 @@ def score_signal(direction, df, mtf_str, regime, dxy_bias):
         elif sk>60: score+=5; reasons.append("StochRSI high +5")
         if c>bbu: score+=10; reasons.append("Above BB upper +10")
         elif c>last.bb_mid: score+=5; reasons.append("Above BB mid +5")
-        # DXY bonus for SELL — rising dollar = good for sell gold
         if dxy_bias == "bullish_dxy":
             score += 10; reasons.append("DXY rising — bearish gold +10")
         elif dxy_bias == "bearish_dxy":
@@ -455,7 +462,6 @@ def generate_signal(tf_data):
         add_log(f"— No signal: {session_name}")
         return None
 
-    # Economic calendar filter
     is_risky, risk_reason = check_high_impact_news()
     if is_risky:
         add_log(f"— No signal: {risk_reason}")
@@ -467,7 +473,7 @@ def generate_signal(tf_data):
         df = tf_data.get(keys[-1]) if keys else None
     if df is None or len(df)<100: return None
 
-    df = add_indicators(df)  # FIX: add indicators before accessing rsi/macd/adx etc.
+    df = add_indicators(df)
 
     bias, mtf_str, mtf_detail = get_mtf_bias(tf_data)
     if bias=="neutral":
@@ -484,7 +490,6 @@ def generate_signal(tf_data):
     if bias=="buy" and rsi>72: add_log(f"— No signal: RSI {rsi:.1f} too high"); return None
     if bias=="sell" and rsi<28: add_log(f"— No signal: RSI {rsi:.1f} too low"); return None
 
-    # Get DXY bias
     dxy_bias = get_dxy_bias()
     if dxy_bias != "neutral_dxy":
         add_log(f"📊 DXY: {dxy_bias}")
@@ -525,44 +530,92 @@ def generate_signal(tf_data):
 #  RISK STATE
 # ─────────────────────────────────────────────────────────
 
-RISK_PER_TRADE = 1.0
-ACCOUNT_BALANCE = float(os.environ.get("ACCOUNT_BALANCE","10000"))
+RISK_PER_TRADE = 1.0  # 1% riskist per tehing
 
 def check_signal_results():
+    """
+    Kontrollib avatud signaale — kui hind on jõudnud TP/SL-i,
+    sulgeb tehingu, uuendab PnL ja balance Supabase'is.
+    Sisaldab breakeven loogikat: kui hind on liikunud 1x ATR kasumi suunas,
+    märgib signaali breakeven staatusesse (SL liigutatakse entry peale).
+    """
     try:
         signals = sb_select("signals", "executed=eq.false&order=created_at.desc&limit=20")
         for sig in signals:
             created = datetime.fromisoformat(sig["created_at"].replace("Z","+00:00"))
             age_hours = (datetime.now(timezone.utc) - created).total_seconds() / 3600
-            if age_hours < 4:
+            if age_hours < 1:
                 continue
-            entry = float(sig.get("entry", 0))
-            tp = float(sig.get("tp", 0))
-            sl = float(sig.get("sl", 0))
+
+            entry     = float(sig.get("entry", 0))
+            tp        = float(sig.get("tp", 0))
+            sl        = float(sig.get("sl", 0))
+            atr       = float(sig.get("atr", 5.0))
             direction = sig.get("direction", "buy")
+            sig_id    = sig.get("id")
+
             prices = sb_select("bot_state", "id=eq.1")
             if not prices:
                 continue
             current = float(prices[0].get("price", 0))
+            if current == 0:
+                continue
+
+            # ── Trailing / breakeven loogika
+            # Kui hind on liikunud 1x ATR kasumi suunas → breakeven (SL = entry)
+            breakeven = sig.get("breakeven", False)
+            if not breakeven:
+                if direction == "buy" and current >= entry + atr:
+                    sb_upsert("signals", {"id": sig_id, "breakeven": True, "sl": entry})
+                    add_log(f"🔒 Breakeven activated: BUY {entry} → SL moved to entry")
+                    send_telegram(f"🔒 <b>Breakeven aktiveeritud</b>\nBUY @ {entry} — SL liigutati entry peale")
+                    continue
+                elif direction == "sell" and current <= entry - atr:
+                    sb_upsert("signals", {"id": sig_id, "breakeven": True, "sl": entry})
+                    add_log(f"🔒 Breakeven activated: SELL {entry} → SL moved to entry")
+                    send_telegram(f"🔒 <b>Breakeven aktiveeritud</b>\nSELL @ {entry} — SL liigutati entry peale")
+                    continue
+
+            # Kui breakeven on aktiivne, kasuta uuendatud SL-i (entry)
+            effective_sl = entry if breakeven else sl
+
+            # ── TP / SL kontroll
             if direction == "buy":
-                result = "TP" if current >= tp else "SL" if current <= sl else None
-                pnl = abs(tp-entry) if result=="TP" else -abs(sl-entry) if result=="SL" else None
+                result = "TP" if current >= tp else "SL" if current <= effective_sl else None
+                pnl_pts = abs(tp-entry) if result=="TP" else -abs(effective_sl-entry) if result=="SL" else None
             else:
-                result = "TP" if current <= tp else "SL" if current >= sl else None
-                pnl = abs(entry-tp) if result=="TP" else -abs(entry-sl) if result=="SL" else None
+                result = "TP" if current <= tp else "SL" if current >= effective_sl else None
+                pnl_pts = abs(entry-tp) if result=="TP" else -abs(entry-effective_sl) if result=="SL" else None
+
             if result:
+                # Arvuta tegelik PnL eurodes
+                balance = get_account_balance()
+                lot     = float(sig.get("lot", 0.01))
+                # Gold: 1 pip = $1 per 0.01 lot → pnl_eur ≈ pnl_pts * lot * 100
+                pnl_eur = round(pnl_pts * lot * 100, 2)
+
                 sb_upsert("trades", {
-                    "signal_id": sig.get("id"),
+                    "signal_id": sig_id,
                     "direction": direction,
-                    "entry": entry,
-                    "sl": sl,
-                    "tp": tp,
-                    "result": result,
-                    "pnl": round(pnl, 2),
+                    "entry":     entry,
+                    "sl":        effective_sl,
+                    "tp":        tp,
+                    "lot":       lot,
+                    "result":    result,
+                    "pnl":       pnl_eur,
                     "created_at": datetime.now(timezone.utc).isoformat(),
                 })
-                sb_upsert("signals", {"id": sig.get("id"), "executed": True})
-                add_log(f"📊 Trade closed: {result} PnL:{pnl:.2f}")
+                sb_upsert("signals", {"id": sig_id, "executed": True})
+
+                # Uuenda balance Supabase'is
+                new_balance = round(balance + pnl_eur, 2)
+                sb_upsert("bot_state", {"id": 1, "balance": new_balance})
+                add_log(f"📊 Trade closed: {result}  PnL: {pnl_eur:+.2f}€  Balance: {new_balance:.2f}€")
+                send_telegram(
+                    f"{'✅' if result=='TP' else '❌'} <b>Tehing suletud: {result}</b>\n"
+                    f"{'BUY' if direction=='buy' else 'SELL'} @ {entry}\n"
+                    f"PnL: <b>{pnl_eur:+.2f}€</b>  |  Balance: <b>{new_balance:.2f}€</b>"
+                )
     except Exception as e:
         logger.error(f"check_signal_results error: {e}")
 
@@ -582,12 +635,23 @@ def get_stats_from_supabase():
     }
 
 def calc_lot(entry, sl, score):
-    risk_pct = RISK_PER_TRADE/100
-    factor   = 0.7 + 0.3*max(0,(score-MIN_SCORE))/(100-MIN_SCORE)
-    risk_amt = ACCOUNT_BALANCE * risk_pct * factor
-    sl_dist  = abs(entry-sl)
-    if sl_dist==0: return 0.01
-    return round(max(0.01,min(5.0, risk_amt/(sl_dist*100))),2)
+    """
+    Dünaamiline lot sizing — riskib 1% kontojäägist per tehing.
+    Gold: 1 lot = 100oz, pip value ≈ $1 per 0.01 lot per $1 liikumine.
+    Valem: lot = (balance * risk%) / (sl_dist * 100)
+    Näide: 100€ * 1% / (5.0 * 100) = 0.01 lot ✓
+    Skooriga faktor: kõrgem skoor → kergelt suurem risk (max 1.3x).
+    """
+    balance  = get_account_balance()
+    risk_pct = RISK_PER_TRADE / 100
+    factor   = 1.0 + 0.3 * max(0, (score - MIN_SCORE)) / (100 - MIN_SCORE)
+    risk_amt = balance * risk_pct * factor
+    sl_dist  = abs(entry - sl)
+    if sl_dist == 0:
+        return 0.01
+    lot = risk_amt / (sl_dist * 100)
+    lot = round(max(0.01, min(0.5, lot)), 2)  # max 0.5 lot väikese konto kaitseks
+    return lot
 
 
 # ─────────────────────────────────────────────────────────
@@ -611,6 +675,8 @@ def format_signal_msg(sig, lot):
     bar = "█"*(sig["score"]//10) + "░"*(10-sig["score"]//10)
     mtf = "\n".join(f"  {tf}: {v}" for tf,v in sig.get("mtf_detail",{}).items())
     dxy = sig.get("dxy_bias","neutral_dxy").replace("_dxy","").upper()
+    balance = get_account_balance()
+    risk_eur = round(balance * RISK_PER_TRADE / 100, 2)
     return (
         f"{e} <b>NEMSIS v2 — XAUUSD {'📈 BUY' if d=='buy' else '📉 SELL'}</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━\n"
@@ -618,6 +684,7 @@ def format_signal_msg(sig, lot):
         f"🛑 SL: <b>{sig['sl']}</b>\n"
         f"🎯 TP: <b>{sig['tp']}</b>\n"
         f"⚖️ R:R: <b>1:{sig['rr']}</b>  |  Lot: <b>{lot}</b>\n"
+        f"💼 Balance: <b>{balance:.2f}€</b>  |  Risk: <b>{risk_eur:.2f}€</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━\n"
         f"📊 Score: <b>{sig['score']}/100</b> [{bar}]\n"
         f"🔎 RSI:{sig['rsi']}  ADX:{sig['adx']}  ATR:{sig['atr']}\n"
@@ -837,7 +904,14 @@ def run_market_analysis(tf_data=None):
 
 def main():
     add_log("🚀 NEMSIS v2 Cloud Bot started")
-    send_telegram("🚀 <b>NEMSIS v2</b> — Cloud bot started\nSignal-only mode | XAUUSD")
+    balance = get_account_balance()
+    add_log(f"💼 Starting balance: {balance:.2f}€")
+    send_telegram(f"🚀 <b>NEMSIS v2</b> — Cloud bot started\nSignal-only mode | XAUUSD\n💼 Balance: <b>{balance:.2f}€</b>")
+
+    # Initialiseeri balance Supabase'is kui puudub
+    rows = sb_select("bot_state", "id=eq.1&select=balance")
+    if not rows or not rows[0].get("balance"):
+        sb_upsert("bot_state", {"id": 1, "balance": balance})
 
     while True:
         try:
@@ -850,13 +924,14 @@ def main():
             check_signal_results()
             sig      = generate_signal(tf_data)
             stats    = get_stats_from_supabase()
+            balance  = get_account_balance()
 
             risk = {
-                "balance":       ACCOUNT_BALANCE,
+                "balance":       balance,
                 "can_trade":     True,
-                "daily_pnl":     0,
-                "drawdown_pct":  0,
-                "daily_loss_pct":0,
+                "daily_pnl":     stats.get("net_pnl", 0),
+                "drawdown_pct":  round((1 - balance / _BALANCE_DEFAULT) * 100, 1) if balance < _BALANCE_DEFAULT else 0,
+                "daily_loss_pct": 0,
             }
 
             sb_upsert("bot_state", {
@@ -873,24 +948,26 @@ def main():
 
             if sig:
                 lot = calc_lot(sig["entry"], sig["sl"], sig["score"])
-                add_log(f"🔔 SIGNAL {sig['direction'].upper()} @ {sig['entry']}  score:{sig['score']}  lot:{lot}")
+                add_log(f"🔔 SIGNAL {sig['direction'].upper()} @ {sig['entry']}  score:{sig['score']}  lot:{lot}  balance:{balance:.2f}€")
 
                 sb_insert("signals", {
-                    "direction":    sig["direction"],
-                    "entry":        sig["entry"],
-                    "sl":           sig["sl"],
-                    "tp":           sig["tp"],
-                    "rr":           sig["rr"],
-                    "score":        sig["score"],
-                    "rsi":          sig["rsi"],
-                    "adx":          sig["adx"],
-                    "atr":          sig["atr"],
-                    "regime":       sig["regime"],
-                    "session":      sig["session"],
-                    "smc_bonus":    sig.get("smc_bonus",0),
-                    "mtf_detail":   sig.get("mtf_detail",{}),
-                    "score_reasons":sig.get("score_reasons",[]),
-                    "executed":     False,
+                    "direction":     sig["direction"],
+                    "entry":         sig["entry"],
+                    "sl":            sig["sl"],
+                    "tp":            sig["tp"],
+                    "rr":            sig["rr"],
+                    "score":         sig["score"],
+                    "rsi":           sig["rsi"],
+                    "adx":           sig["adx"],
+                    "atr":           sig["atr"],
+                    "lot":           lot,
+                    "regime":        sig["regime"],
+                    "session":       sig["session"],
+                    "smc_bonus":     sig.get("smc_bonus",0),
+                    "mtf_detail":    sig.get("mtf_detail",{}),
+                    "score_reasons": sig.get("score_reasons",[]),
+                    "executed":      False,
+                    "breakeven":     False,
                 })
 
                 send_telegram(format_signal_msg(sig, lot))
