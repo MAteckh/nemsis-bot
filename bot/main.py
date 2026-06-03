@@ -4,7 +4,7 @@ Runs on Railway 24/7, pushes signals + state to Supabase.
 """
 
 import sys, os, json, time, logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 ROOT = Path(__file__).parent
@@ -96,18 +96,12 @@ def sb_select(table: str, params: str = "") -> list:
 
 
 # ─────────────────────────────────────────────────────────
-#  DYNAMIC BALANCE — loeb Supabase'ist, Railway on fallback
+#  DYNAMIC BALANCE
 # ─────────────────────────────────────────────────────────
 
 _BALANCE_DEFAULT = float(os.environ.get("ACCOUNT_BALANCE", "100"))
 
 def get_account_balance() -> float:
-    """
-    Loeb balance Supabase bot_state tabelist (id=1, väli 'balance').
-    Kui pole seatud, kasutab Railway ACCOUNT_BALANCE muutujat.
-    Kasumiga kasvab automaatselt — uuenda bot_state.balance käsitsi
-    või lase check_signal_results() seda teha.
-    """
     try:
         rows = sb_select("bot_state", "id=eq.1&select=balance")
         if rows and rows[0].get("balance"):
@@ -117,6 +111,112 @@ def get_account_balance() -> float:
     except Exception as e:
         logger.warning(f"Balance fetch error: {e}")
     return _BALANCE_DEFAULT
+
+
+# ─────────────────────────────────────────────────────────
+#  RISK PROTECTION — 4 kaitset
+# ─────────────────────────────────────────────────────────
+
+MAX_DAILY_LOSS_PCT  = 3.0   # 3% päevakahjum → stop
+MAX_DRAWDOWN_PCT    = 10.0  # 10% kogu langus → stop
+MAX_OPEN_SIGNALS    = 1     # korraga max 1 avatud signaal
+MAX_LOSS_STREAK     = 3     # 3 kaotust järjest → 24h paus
+
+def get_risk_state() -> dict:
+    """
+    Loeb risk state Supabase'ist.
+    Tagastab: daily_loss, drawdown, loss_streak, paused_until
+    """
+    try:
+        rows = sb_select("bot_state", "id=eq.1&select=risk_state")
+        if rows and rows[0].get("risk_state"):
+            return rows[0]["risk_state"]
+    except Exception as e:
+        logger.warning(f"Risk state fetch error: {e}")
+    return {
+        "daily_loss":    0.0,
+        "daily_reset":   datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+        "loss_streak":   0,
+        "paused_until":  None,
+    }
+
+def save_risk_state(state: dict):
+    sb_upsert("bot_state", {"id": 1, "risk_state": state})
+
+def check_risk_limits() -> tuple[bool, str]:
+    """
+    Kontrollib kõiki 4 kaitset.
+    Tagastab (can_trade: bool, reason: str)
+    """
+    balance     = get_account_balance()
+    risk_state  = get_risk_state()
+    now         = datetime.now(timezone.utc)
+
+    # ── Reset daily loss kell 00:00 UTC
+    today = now.strftime("%Y-%m-%d")
+    if risk_state.get("daily_reset") != today:
+        risk_state["daily_loss"]  = 0.0
+        risk_state["daily_reset"] = today
+        save_risk_state(risk_state)
+        add_log("🔄 Daily loss counter reset")
+
+    # ── Kaitse 1: Pause streak
+    paused_until = risk_state.get("paused_until")
+    if paused_until:
+        pause_dt = datetime.fromisoformat(paused_until)
+        if now < pause_dt:
+            remaining = int((pause_dt - now).total_seconds() / 3600)
+            return False, f"Loss streak pause — {remaining}h remaining"
+        else:
+            risk_state["paused_until"] = None
+            risk_state["loss_streak"]  = 0
+            save_risk_state(risk_state)
+            add_log("✅ Loss streak pause lifted")
+
+    # ── Kaitse 2: Daily loss limit
+    daily_loss = abs(float(risk_state.get("daily_loss", 0)))
+    daily_loss_pct = (daily_loss / _BALANCE_DEFAULT) * 100
+    if daily_loss_pct >= MAX_DAILY_LOSS_PCT:
+        return False, f"Daily loss limit {daily_loss_pct:.1f}% >= {MAX_DAILY_LOSS_PCT}% — waiting for reset"
+
+    # ── Kaitse 3: Max drawdown
+    drawdown_pct = (1 - balance / _BALANCE_DEFAULT) * 100
+    if drawdown_pct >= MAX_DRAWDOWN_PCT:
+        return False, f"Max drawdown {drawdown_pct:.1f}% >= {MAX_DRAWDOWN_PCT}% — trading stopped"
+
+    # ── Kaitse 4: Max open signals
+    open_signals = sb_select("signals", "executed=eq.false&select=id")
+    if len(open_signals) >= MAX_OPEN_SIGNALS:
+        return False, f"Max open signals ({MAX_OPEN_SIGNALS}) reached — waiting for close"
+
+    return True, ""
+
+def update_risk_after_trade(pnl_eur: float):
+    """Uuendab risk state pärast tehingu sulgemist."""
+    risk_state = get_risk_state()
+    now        = datetime.now(timezone.utc)
+
+    if pnl_eur < 0:
+        # Kahjum
+        risk_state["daily_loss"]  = float(risk_state.get("daily_loss", 0)) + abs(pnl_eur)
+        risk_state["loss_streak"] = int(risk_state.get("loss_streak", 0)) + 1
+        streak = risk_state["loss_streak"]
+        add_log(f"📉 Loss streak: {streak}/{MAX_LOSS_STREAK}")
+
+        if streak >= MAX_LOSS_STREAK:
+            pause_until = (now + timedelta(hours=24)).isoformat()
+            risk_state["paused_until"] = pause_until
+            add_log(f"⛔ {MAX_LOSS_STREAK} kaotust järjest — 24h paus aktiveeritud")
+            send_telegram(
+                f"⛔ <b>NEMSIS — 24h paus aktiveeritud</b>\n"
+                f"{MAX_LOSS_STREAK} kaotust järjest.\n"
+                f"Kauplemisel paus kuni: {pause_until[:16]} UTC"
+            )
+    else:
+        # Kasum — reset streak
+        risk_state["loss_streak"] = 0
+
+    save_risk_state(risk_state)
 
 
 # ─────────────────────────────────────────────────────────
@@ -134,18 +234,15 @@ def check_high_impact_news():
         now = datetime.now(timezone.utc)
         h = now.hour
         m = now.minute
-        wd = now.weekday()  # 0=Mon, 4=Fri
+        wd = now.weekday()
 
         if wd == 4 and now.day <= 7:
             if 10 <= h <= 14:
                 return True, "NFP Friday — high volatility window"
-
         if wd == 2 and 16 <= h <= 20:
             return True, "Potential FOMC window — avoiding signal"
-
         if wd in [1, 2] and 7 <= now.day <= 14 and 12 <= h <= 14:
             return True, "Potential CPI window — avoiding signal"
-
         if 13 <= h < 14 and m < 30:
             return True, "US market open — high spread window"
 
@@ -173,7 +270,6 @@ def get_dxy_bias():
         ema20 = closes.ewm(span=20, adjust=False).mean().iloc[-1]
         last  = float(closes.iloc[-1])
         change_pct = (last - float(closes.iloc[-6])) / float(closes.iloc[-6]) * 100
-
         if ema10 > ema20 and change_pct > 0.15:
             return "bullish_dxy"
         elif ema10 < ema20 and change_pct < -0.15:
@@ -275,7 +371,6 @@ def detect_candle_pattern(df):
     upper_wick = c.high - max(c.close, c.open)
     lower_wick = min(c.close, c.open) - c.low
     body_ratio = body / full
-
     if c.close > c.open and p.close < p.open:
         if c.open < p.close and c.close > p.open:
             return "bullish_engulfing", 15
@@ -349,7 +444,7 @@ def get_price():
 # ─────────────────────────────────────────────────────────
 
 TF_WEIGHTS = {"15m":0.10,"30m":0.20,"1h":0.30,"4h":0.40}
-MIN_SCORE  = 55   # tõsteti 45 → 55
+MIN_SCORE  = 55
 ATR_SL     = 1.3
 ATR_TP     = 2.6
 
@@ -467,6 +562,12 @@ def generate_signal(tf_data):
         add_log(f"— No signal: {risk_reason}")
         return None
 
+    # ── Risk protection check
+    can_trade, risk_reason = check_risk_limits()
+    if not can_trade:
+        add_log(f"🛡 Risk limit: {risk_reason}")
+        return None
+
     df = tf_data.get("1h")
     if df is None:
         keys = list(tf_data.keys())
@@ -527,18 +628,12 @@ def generate_signal(tf_data):
 
 
 # ─────────────────────────────────────────────────────────
-#  RISK STATE
+#  TRADE MANAGEMENT
 # ─────────────────────────────────────────────────────────
 
-RISK_PER_TRADE = 1.0  # 1% riskist per tehing
+RISK_PER_TRADE = 1.0
 
 def check_signal_results():
-    """
-    Kontrollib avatud signaale — kui hind on jõudnud TP/SL-i,
-    sulgeb tehingu, uuendab PnL ja balance Supabase'is.
-    Sisaldab breakeven loogikat: kui hind on liikunud 1x ATR kasumi suunas,
-    märgib signaali breakeven staatusesse (SL liigutatakse entry peale).
-    """
     try:
         signals = sb_select("signals", "executed=eq.false&order=created_at.desc&limit=20")
         for sig in signals:
@@ -555,31 +650,26 @@ def check_signal_results():
             sig_id    = sig.get("id")
 
             prices = sb_select("bot_state", "id=eq.1")
-            if not prices:
-                continue
+            if not prices: continue
             current = float(prices[0].get("price", 0))
-            if current == 0:
-                continue
+            if current == 0: continue
 
-            # ── Trailing / breakeven loogika
-            # Kui hind on liikunud 1x ATR kasumi suunas → breakeven (SL = entry)
+            # Breakeven loogika
             breakeven = sig.get("breakeven", False)
             if not breakeven:
                 if direction == "buy" and current >= entry + atr:
                     sb_upsert("signals", {"id": sig_id, "breakeven": True, "sl": entry})
-                    add_log(f"🔒 Breakeven activated: BUY {entry} → SL moved to entry")
+                    add_log(f"🔒 Breakeven: BUY {entry} → SL = entry")
                     send_telegram(f"🔒 <b>Breakeven aktiveeritud</b>\nBUY @ {entry} — SL liigutati entry peale")
                     continue
                 elif direction == "sell" and current <= entry - atr:
                     sb_upsert("signals", {"id": sig_id, "breakeven": True, "sl": entry})
-                    add_log(f"🔒 Breakeven activated: SELL {entry} → SL moved to entry")
+                    add_log(f"🔒 Breakeven: SELL {entry} → SL = entry")
                     send_telegram(f"🔒 <b>Breakeven aktiveeritud</b>\nSELL @ {entry} — SL liigutati entry peale")
                     continue
 
-            # Kui breakeven on aktiivne, kasuta uuendatud SL-i (entry)
             effective_sl = entry if breakeven else sl
 
-            # ── TP / SL kontroll
             if direction == "buy":
                 result = "TP" if current >= tp else "SL" if current <= effective_sl else None
                 pnl_pts = abs(tp-entry) if result=="TP" else -abs(effective_sl-entry) if result=="SL" else None
@@ -588,10 +678,8 @@ def check_signal_results():
                 pnl_pts = abs(entry-tp) if result=="TP" else -abs(entry-effective_sl) if result=="SL" else None
 
             if result:
-                # Arvuta tegelik PnL eurodes
                 balance = get_account_balance()
                 lot     = float(sig.get("lot", 0.01))
-                # Gold: 1 pip = $1 per 0.01 lot → pnl_eur ≈ pnl_pts * lot * 100
                 pnl_eur = round(pnl_pts * lot * 100, 2)
 
                 sb_upsert("trades", {
@@ -607,9 +695,12 @@ def check_signal_results():
                 })
                 sb_upsert("signals", {"id": sig_id, "executed": True})
 
-                # Uuenda balance Supabase'is
                 new_balance = round(balance + pnl_eur, 2)
                 sb_upsert("bot_state", {"id": 1, "balance": new_balance})
+
+                # Uuenda risk state
+                update_risk_after_trade(pnl_eur)
+
                 add_log(f"📊 Trade closed: {result}  PnL: {pnl_eur:+.2f}€  Balance: {new_balance:.2f}€")
                 send_telegram(
                     f"{'✅' if result=='TP' else '❌'} <b>Tehing suletud: {result}</b>\n"
@@ -635,23 +726,14 @@ def get_stats_from_supabase():
     }
 
 def calc_lot(entry, sl, score):
-    """
-    Dünaamiline lot sizing — riskib 1% kontojäägist per tehing.
-    Gold: 1 lot = 100oz, pip value ≈ $1 per 0.01 lot per $1 liikumine.
-    Valem: lot = (balance * risk%) / (sl_dist * 100)
-    Näide: 100€ * 1% / (5.0 * 100) = 0.01 lot ✓
-    Skooriga faktor: kõrgem skoor → kergelt suurem risk (max 1.3x).
-    """
     balance  = get_account_balance()
     risk_pct = RISK_PER_TRADE / 100
     factor   = 1.0 + 0.3 * max(0, (score - MIN_SCORE)) / (100 - MIN_SCORE)
     risk_amt = balance * risk_pct * factor
     sl_dist  = abs(entry - sl)
-    if sl_dist == 0:
-        return 0.01
+    if sl_dist == 0: return 0.01
     lot = risk_amt / (sl_dist * 100)
-    lot = round(max(0.01, min(0.5, lot)), 2)  # max 0.5 lot väikese konto kaitseks
-    return lot
+    return round(max(0.01, min(0.5, lot)), 2)
 
 
 # ─────────────────────────────────────────────────────────
@@ -675,8 +757,11 @@ def format_signal_msg(sig, lot):
     bar = "█"*(sig["score"]//10) + "░"*(10-sig["score"]//10)
     mtf = "\n".join(f"  {tf}: {v}" for tf,v in sig.get("mtf_detail",{}).items())
     dxy = sig.get("dxy_bias","neutral_dxy").replace("_dxy","").upper()
-    balance = get_account_balance()
+    balance  = get_account_balance()
     risk_eur = round(balance * RISK_PER_TRADE / 100, 2)
+    risk_state = get_risk_state()
+    streak   = risk_state.get("loss_streak", 0)
+    daily_loss = abs(float(risk_state.get("daily_loss", 0)))
     return (
         f"{e} <b>NEMSIS v2 — XAUUSD {'📈 BUY' if d=='buy' else '📉 SELL'}</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━\n"
@@ -691,6 +776,7 @@ def format_signal_msg(sig, lot):
         f"💵 DXY: <b>{dxy}</b>\n"
         f"🌍 {sig['regime']} · {sig['session']}\n"
         f"━━━━━━━━━━━━━━━━━━━━━\n"
+        f"🛡 Streak: {streak}/{MAX_LOSS_STREAK}  |  Daily loss: {daily_loss:.2f}€/{round(_BALANCE_DEFAULT*MAX_DAILY_LOSS_PCT/100,2)}€\n"
         f"📐 MTF:\n{mtf}"
     )
 
@@ -707,10 +793,8 @@ def fetch_gold_news():
         articles = data.get("articles", [])
         if not articles:
             return [], ""
-
         bull_kw = ["rise","rally","surge","gain","jump","high","bullish","strong","increase","support"]
         bear_kw = ["fall","drop","decline","crash","low","bearish","weak","decrease","pressure","sell"]
-
         news_out = []
         headlines = []
         for a in articles[:6]:
@@ -719,14 +803,8 @@ def fetch_gold_news():
             brs = sum(1 for k in bear_kw if k in t)
             s = "bull" if bs > brs else "bear" if brs > bs else "neutral"
             mins = int((datetime.now(timezone.utc) - datetime.fromisoformat(a["publishedAt"].replace("Z","+00:00"))).total_seconds() / 60)
-            news_out.append({
-                "title": a.get("title",""),
-                "sentiment": s,
-                "mins_ago": mins,
-                "url": a.get("url","")
-            })
+            news_out.append({"title": a.get("title",""), "sentiment": s, "mins_ago": mins, "url": a.get("url","")})
             headlines.append(a.get("title",""))
-
         return news_out, "\n".join(headlines[:4])
     except Exception as e:
         logger.error(f"News fetch error: {e}")
@@ -737,13 +815,11 @@ def run_ai_analysis(headlines, tf_data=None):
     if not CLAUDE_KEY:
         logger.warning("CLAUDE_KEY not set — skipping AI analysis")
         return None
-
     try:
         heatmap = {}
         if tf_data:
             for tf, df in tf_data.items():
-                if df is None or len(df) < 50:
-                    continue
+                if df is None or len(df) < 50: continue
                 d = add_indicators(df)
                 last = d.iloc[-1]
                 rsi = float(last.rsi)
@@ -754,7 +830,6 @@ def run_ai_analysis(headlines, tf_data=None):
                 adx = float(last.adx)
                 stoch = float(last.stoch_k) if hasattr(last, "stoch_k") else 50.0
                 bb_pos = float((last.close - last.bb_lo) / (last.bb_up - last.bb_lo + 0.001) * 100)
-
                 def cell_class(v, typ):
                     if typ == "rsi":
                         if v < 35: return "sb"
@@ -776,7 +851,6 @@ def run_ai_analysis(headlines, tf_data=None):
                         if v > 75: return "br"
                         return "n"
                     return "n"
-
                 heatmap[tf] = {
                     "RSI":   cell_class(rsi, "rsi"),
                     "MACD":  cell_class(macd > msig, "bool"),
@@ -785,13 +859,11 @@ def run_ai_analysis(headlines, tf_data=None):
                     "BB":    cell_class(bb_pos, "bb"),
                     "STOCH": cell_class(stoch, "stoch"),
                 }
-
         bull_c = sum(1 for tf in heatmap.values() for v in tf.values() if v in ("sb","b"))
         bear_c = sum(1 for tf in heatmap.values() for v in tf.values() if v in ("sbr","br"))
         total  = bull_c + bear_c + 1
         bull_pct = round(bull_c / total * 100)
         bear_pct = round(bear_c / total * 100)
-
         prompt = f"""You are an elite XAUUSD gold trader. Analyze this market data and give a brief outlook.
 
 Recent gold news:
@@ -806,32 +878,20 @@ Respond ONLY in this JSON format, nothing else:
 
         resp = requests.post(
             "https://api.anthropic.com/v1/messages",
-            headers={
-                "Content-Type": "application/json",
-                "x-api-key": CLAUDE_KEY,
-                "anthropic-version": "2023-06-01"
-            },
-            json={
-                "model": "claude-haiku-4-5-20251001",
-                "max_tokens": 200,
-                "messages": [{"role": "user", "content": prompt}]
-            },
+            headers={"Content-Type": "application/json", "x-api-key": CLAUDE_KEY, "anthropic-version": "2023-06-01"},
+            json={"model": "claude-haiku-4-5-20251001", "max_tokens": 200, "messages": [{"role": "user", "content": prompt}]},
             timeout=20
         )
-
         data = resp.json()
         text = data.get("content",[])[0].get("text","") if data.get("content") else ""
-
         try:
             analysis = json.loads(text.replace("","").strip())
         except Exception:
             analysis = {"verdict": "NEUTRAL", "confidence": 50, "summary": text[:200] or "Analysis unavailable.", "key_factor": "No data"}
-
         analysis["bull_pct"]     = bull_pct
         analysis["bear_pct"]     = bear_pct
         analysis["heatmap_data"] = heatmap
         return analysis
-
     except Exception as e:
         logger.error(f"AI analysis error: {e}")
         return None
@@ -840,14 +900,11 @@ Respond ONLY in this JSON format, nothing else:
 def run_market_analysis(tf_data=None):
     global _last_analysis
     now = time.time()
-
     if now - _last_analysis < ANALYSIS_INTERVAL:
         return
-
     add_log("📰 Running market analysis...")
     news, headlines = fetch_gold_news()
     analysis = run_ai_analysis(headlines, tf_data)
-
     if analysis is None:
         heatmap = {}
         if tf_data:
@@ -880,7 +937,6 @@ def run_market_analysis(tf_data=None):
                     "bull_pct": round(bull_c/total*100),
                     "bear_pct": round(bear_c/total*100),
                     "heatmap_data": heatmap}
-
     sb_upsert("market_analysis", {
         "id":           1,
         "updated_at":   datetime.now(timezone.utc).isoformat(),
@@ -893,7 +949,6 @@ def run_market_analysis(tf_data=None):
         "heatmap_data": analysis.get("heatmap_data", {}),
         "news":         news,
     })
-
     _last_analysis = now
     add_log(f"✅ Analysis: {analysis.get('verdict')} ({analysis.get('confidence')}% confidence)")
 
@@ -906,9 +961,14 @@ def main():
     add_log("🚀 NEMSIS v2 Cloud Bot started")
     balance = get_account_balance()
     add_log(f"💼 Starting balance: {balance:.2f}€")
-    send_telegram(f"🚀 <b>NEMSIS v2</b> — Cloud bot started\nSignal-only mode | XAUUSD\n💼 Balance: <b>{balance:.2f}€</b>")
+    add_log(f"🛡 Risk limits: daily={MAX_DAILY_LOSS_PCT}%  drawdown={MAX_DRAWDOWN_PCT}%  max_open={MAX_OPEN_SIGNALS}  streak={MAX_LOSS_STREAK}")
+    send_telegram(
+        f"🚀 <b>NEMSIS v2</b> — Cloud bot started\n"
+        f"Signal-only mode | XAUUSD\n"
+        f"💼 Balance: <b>{balance:.2f}€</b>\n"
+        f"🛡 Daily loss limit: <b>{MAX_DAILY_LOSS_PCT}%</b>  |  Max drawdown: <b>{MAX_DRAWDOWN_PCT}%</b>"
+    )
 
-    # Initialiseeri balance Supabase'is kui puudub
     rows = sb_select("bot_state", "id=eq.1&select=balance")
     if not rows or not rows[0].get("balance"):
         sb_upsert("bot_state", {"id": 1, "balance": balance})
@@ -917,21 +977,28 @@ def main():
         try:
             add_log("⏱ Scanning...")
 
-            bid, ask = get_price()
-            tf_data  = load_mtf()
+            bid, ask  = get_price()
+            tf_data   = load_mtf()
             run_market_analysis(tf_data)
-
             check_signal_results()
-            sig      = generate_signal(tf_data)
-            stats    = get_stats_from_supabase()
-            balance  = get_account_balance()
+            sig       = generate_signal(tf_data)
+            stats     = get_stats_from_supabase()
+            balance   = get_account_balance()
+            risk_state = get_risk_state()
+
+            drawdown_pct = round((1 - balance / _BALANCE_DEFAULT) * 100, 1) if balance < _BALANCE_DEFAULT else 0.0
+            daily_loss   = abs(float(risk_state.get("daily_loss", 0)))
+            loss_streak  = int(risk_state.get("loss_streak", 0))
+            paused       = risk_state.get("paused_until") is not None
 
             risk = {
-                "balance":       balance,
-                "can_trade":     True,
-                "daily_pnl":     stats.get("net_pnl", 0),
-                "drawdown_pct":  round((1 - balance / _BALANCE_DEFAULT) * 100, 1) if balance < _BALANCE_DEFAULT else 0,
-                "daily_loss_pct": 0,
+                "balance":        balance,
+                "can_trade":      not paused and drawdown_pct < MAX_DRAWDOWN_PCT and (daily_loss / _BALANCE_DEFAULT * 100) < MAX_DAILY_LOSS_PCT,
+                "daily_pnl":      stats.get("net_pnl", 0),
+                "drawdown_pct":   drawdown_pct,
+                "daily_loss_pct": round(daily_loss / _BALANCE_DEFAULT * 100, 1),
+                "loss_streak":    loss_streak,
+                "paused":         paused,
             }
 
             sb_upsert("bot_state", {
@@ -963,9 +1030,9 @@ def main():
                     "lot":           lot,
                     "regime":        sig["regime"],
                     "session":       sig["session"],
-                    "smc_bonus":     sig.get("smc_bonus",0),
-                    "mtf_detail":    sig.get("mtf_detail",{}),
-                    "score_reasons": sig.get("score_reasons",[]),
+                    "smc_bonus":     sig.get("smc_bonus", 0),
+                    "mtf_detail":    sig.get("mtf_detail", {}),
+                    "score_reasons": sig.get("score_reasons", []),
                     "executed":      False,
                     "breakeven":     False,
                 })
