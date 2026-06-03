@@ -467,6 +467,8 @@ def generate_signal(tf_data):
         df = tf_data.get(keys[-1]) if keys else None
     if df is None or len(df)<100: return None
 
+    df = add_indicators(df)  # FIX: add indicators before accessing rsi/macd/adx etc.
+
     bias, mtf_str, mtf_detail = get_mtf_bias(tf_data)
     if bias=="neutral":
         add_log("— No signal: neutral MTF")
