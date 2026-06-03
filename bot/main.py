@@ -175,6 +175,7 @@ def add_indicators(df):
     df["vol_ma"] = df["volume"].rolling(20).mean()
     df["vol_ratio"] = df["volume"] / (df["vol_ma"] + 1e-10)
     return df
+
 def detect_candle_pattern(df):
     if len(df) < 3: return None, 0
     c = df.iloc[-1]
@@ -209,6 +210,7 @@ def detect_candle_pattern(df):
         return "inside_bar", 5
 
     return None, 0
+
 def get_regime(df):
     h = calc_hurst(df.close.tail(60))
     adx = df.adx.iloc[-1] if "adx" in df.columns else 20
@@ -268,7 +270,7 @@ def get_price():
 # ─────────────────────────────────────────────────────────
 
 TF_WEIGHTS = {"15m":0.10,"30m":0.20,"1h":0.30,"4h":0.40}
-MIN_SCORE  = 55
+MIN_SCORE  = 45
 ATR_SL     = 1.3
 ATR_TP     = 2.6
 
@@ -280,6 +282,7 @@ def get_session():
     if 7<=h<12: return True, "london"
     if 13<=h<17: return True, "new_york"
     if 5<=h<7:  return True, "asian_end"
+    if 3<=h<5:  return True, "asian_early"
     return False, f"off-session ({h}:00 UTC)"
 
 def get_mtf_bias(tf_data):
@@ -301,8 +304,8 @@ def get_mtf_bias(tf_data):
         total_w+=w
     if total_w==0: return "neutral",0,detail
     bn,brn = bull_w/total_w, bear_w/total_w
-    if bn>=0.5: return "buy",bn,detail
-    if brn>=0.5: return "sell",brn,detail
+    if bn>=0.4: return "buy",bn,detail
+    if brn>=0.4: return "sell",brn,detail
     return "neutral",max(bn,brn),detail
 
 def score_signal(direction, df, mtf_str, regime):
@@ -332,7 +335,7 @@ def score_signal(direction, df, mtf_str, regime):
         elif sk>60: score+=5; reasons.append("StochRSI high +5")
         if c>bbu: score+=10; reasons.append("Above BB upper +10")
         elif c>last.bb_mid: score+=5; reasons.append("Above BB mid +5")
-    
+
     vol_ratio = float(last.vol_ratio) if "vol_ratio" in df.columns else 1.0
     if vol_ratio > 1.5:
         score += 10; reasons.append(f"High volume +10")
@@ -340,6 +343,7 @@ def score_signal(direction, df, mtf_str, regime):
         score += 5; reasons.append(f"Above avg volume +5")
     elif vol_ratio < 0.7:
         score -= 5; reasons.append(f"Low volume -5")
+
     pattern, pat_bonus = detect_candle_pattern(df)
     if pattern and pat_bonus > 0:
         if direction=="buy" and "bullish" in pattern:
@@ -348,6 +352,7 @@ def score_signal(direction, df, mtf_str, regime):
             score += pat_bonus; reasons.append(f"{pattern} +{pat_bonus}")
         elif pattern == "inside_bar":
             score += pat_bonus; reasons.append(f"inside_bar +{pat_bonus}")
+
     if adx>22:
         p=min(int((adx-22)/30*15),15); score+=p; reasons.append(f"ADX {adx:.1f} +{p}")
 
@@ -528,7 +533,6 @@ def format_signal_msg(sig, lot):
     )
 
 
-
 # ─────────────────────────────────────────────────────────
 #  MARKET ANALYSIS (news + AI) — runs every 30 min
 # ─────────────────────────────────────────────────────────
@@ -542,10 +546,10 @@ def fetch_gold_news():
         articles = data.get("articles", [])
         if not articles:
             return [], ""
-        
+
         bull_kw = ["rise","rally","surge","gain","jump","high","bullish","strong","increase","support"]
         bear_kw = ["fall","drop","decline","crash","low","bearish","weak","decrease","pressure","sell"]
-        
+
         news_out = []
         headlines = []
         for a in articles[:6]:
@@ -561,7 +565,7 @@ def fetch_gold_news():
                 "url": a.get("url","")
             })
             headlines.append(a.get("title",""))
-        
+
         return news_out, "\n".join(headlines[:4])
     except Exception as e:
         logger.error(f"News fetch error: {e}")
@@ -573,9 +577,8 @@ def run_ai_analysis(headlines, tf_data=None):
     if not CLAUDE_KEY:
         logger.warning("CLAUDE_KEY not set — skipping AI analysis")
         return None
-    
+
     try:
-        # Build heatmap data from tf_data
         heatmap = {}
         if tf_data:
             for tf, df in tf_data.items():
@@ -591,7 +594,7 @@ def run_ai_analysis(headlines, tf_data=None):
                 adx = float(last.adx)
                 stoch = float(last.stoch_k) if hasattr(last, "stoch_k") else 50.0
                 bb_pos = float((last.close - last.bb_lo) / (last.bb_up - last.bb_lo + 0.001) * 100)
-                
+
                 def cell_class(v, typ):
                     if typ == "rsi":
                         if v < 35: return "sb"
@@ -613,7 +616,7 @@ def run_ai_analysis(headlines, tf_data=None):
                         if v > 75: return "br"
                         return "n"
                     return "n"
-                
+
                 heatmap[tf] = {
                     "RSI":   cell_class(rsi, "rsi"),
                     "MACD":  cell_class(macd > msig, "bool"),
@@ -622,15 +625,13 @@ def run_ai_analysis(headlines, tf_data=None):
                     "BB":    cell_class(bb_pos, "bb"),
                     "STOCH": cell_class(stoch, "stoch"),
                 }
-        
-        # Bull/bear count from heatmap
+
         bull_c = sum(1 for tf in heatmap.values() for v in tf.values() if v in ("sb","b"))
         bear_c = sum(1 for tf in heatmap.values() for v in tf.values() if v in ("sbr","br"))
         total  = bull_c + bear_c + 1
         bull_pct = round(bull_c / total * 100)
         bear_pct = round(bear_c / total * 100)
-        
-        # Claude API call
+
         prompt = f"""You are an elite XAUUSD gold trader. Analyze this market data and give a brief outlook.
 
 Recent gold news:
@@ -657,20 +658,20 @@ Respond ONLY in this JSON format, nothing else:
             },
             timeout=20
         )
-        
+
         data = resp.json()
         text = data.get("content",[])[0].get("text","") if data.get("content") else ""
-        
+
         try:
             analysis = json.loads(text.replace("","").strip())
         except Exception:
             analysis = {"verdict": "NEUTRAL", "confidence": 50, "summary": text[:200] or "Analysis unavailable.", "key_factor": "No data"}
-        
+
         analysis["bull_pct"]     = bull_pct
         analysis["bear_pct"]     = bear_pct
         analysis["heatmap_data"] = heatmap
         return analysis
-        
+
     except Exception as e:
         logger.error(f"AI analysis error: {e}")
         return None
@@ -680,48 +681,47 @@ def run_market_analysis(tf_data=None):
     """Fetch news + run AI analysis + push to Supabase."""
     global _last_analysis
     now = time.time()
-    
+
     if now - _last_analysis < ANALYSIS_INTERVAL:
-        return  # Not time yet
-    
+        return
+
     add_log("📰 Running market analysis...")
     news, headlines = fetch_gold_news()
     analysis = run_ai_analysis(headlines, tf_data)
-    
+
     if analysis is None:
-    # Build heatmap even without AI
-     heatmap = {}
-    if tf_data:
-        for tf, df in tf_data.items():
-            if df is None or len(df) < 50: continue
-            d = add_indicators(df)
-            last = d.iloc[-1]
-            rsi = float(last.rsi)
-            macd = float(last.macd)
-            msig = float(last.macd_sig)
-            ema20 = float(last.ema20)
-            ema50 = float(last.ema50)
-            adx = float(last.adx)
-            stoch = float(last.stoch_k) if "stoch_k" in d.columns else 50.0
-            bb_pos = float((last.close - last.bb_lo) / (last.bb_up - last.bb_lo + 0.001) * 100)
-            def cc(v, t):
-                if t=="rsi": return "sb" if v<35 else "b" if v<45 else "sbr" if v>65 else "br" if v>55 else "n"
-                if t=="bool": return "b" if v else "br"
-                if t=="adx": return "sb" if v>35 else "b" if v>22 else "n"
-                if t=="bb": return "b" if v<20 else "br" if v>80 else "n"
-                if t=="stoch": return "b" if v<25 else "br" if v>75 else "n"
-                return "n"
-            heatmap[tf] = {"RSI": cc(rsi,"rsi"), "MACD": cc(macd>msig,"bool"), "EMA": cc(ema20>ema50,"bool"), "ADX": cc(adx,"adx"), "BB": cc(bb_pos,"bb"), "STOCH": cc(stoch,"stoch")}
-    bull_c = sum(1 for tf in heatmap.values() for v in tf.values() if v in ("sb","b"))
-    bear_c = sum(1 for tf in heatmap.values() for v in tf.values() if v in ("sbr","br"))
-    total = bull_c + bear_c + 1
-    analysis = {"verdict": "NEUTRAL", "confidence": 50,
-                "summary": "AI analysis unavailable — set CLAUDE_KEY in Railway Variables.",
-                "key_factor": "No API key",
-                "bull_pct": round(bull_c/total*100),
-                "bear_pct": round(bear_c/total*100),
-                "heatmap_data": heatmap}
-    
+        heatmap = {}
+        if tf_data:
+            for tf, df in tf_data.items():
+                if df is None or len(df) < 50: continue
+                d = add_indicators(df)
+                last = d.iloc[-1]
+                rsi = float(last.rsi)
+                macd = float(last.macd)
+                msig = float(last.macd_sig)
+                ema20 = float(last.ema20)
+                ema50 = float(last.ema50)
+                adx = float(last.adx)
+                stoch = float(last.stoch_k) if "stoch_k" in d.columns else 50.0
+                bb_pos = float((last.close - last.bb_lo) / (last.bb_up - last.bb_lo + 0.001) * 100)
+                def cc(v, t):
+                    if t=="rsi": return "sb" if v<35 else "b" if v<45 else "sbr" if v>65 else "br" if v>55 else "n"
+                    if t=="bool": return "b" if v else "br"
+                    if t=="adx": return "sb" if v>35 else "b" if v>22 else "n"
+                    if t=="bb": return "b" if v<20 else "br" if v>80 else "n"
+                    if t=="stoch": return "b" if v<25 else "br" if v>75 else "n"
+                    return "n"
+                heatmap[tf] = {"RSI": cc(rsi,"rsi"), "MACD": cc(macd>msig,"bool"), "EMA": cc(ema20>ema50,"bool"), "ADX": cc(adx,"adx"), "BB": cc(bb_pos,"bb"), "STOCH": cc(stoch,"stoch")}
+        bull_c = sum(1 for tf in heatmap.values() for v in tf.values() if v in ("sb","b"))
+        bear_c = sum(1 for tf in heatmap.values() for v in tf.values() if v in ("sbr","br"))
+        total = bull_c + bear_c + 1
+        analysis = {"verdict": "NEUTRAL", "confidence": 50,
+                    "summary": "AI analysis unavailable — set CLAUDE_KEY in Railway Variables.",
+                    "key_factor": "No API key",
+                    "bull_pct": round(bull_c/total*100),
+                    "bear_pct": round(bear_c/total*100),
+                    "heatmap_data": heatmap}
+
     sb_upsert("market_analysis", {
         "id":           1,
         "updated_at":   datetime.now(timezone.utc).isoformat(),
@@ -734,9 +734,9 @@ def run_market_analysis(tf_data=None):
         "heatmap_data": analysis.get("heatmap_data", {}),
         "news":         news,
     })
-    
+
     _last_analysis = now
-    add_log(f"✅ Analysis: {analysis.get("verdict")} ({analysis.get("confidence")}% confidence)")
+    add_log(f"✅ Analysis: {analysis.get('verdict')} ({analysis.get('confidence')}% confidence)")
 
 # ─────────────────────────────────────────────────────────
 #  MAIN LOOP
@@ -752,7 +752,6 @@ def main():
 
             bid, ask = get_price()
             tf_data  = load_mtf()
-            # Market analysis (news + AI) every 30 min
             run_market_analysis(tf_data)
 
             check_signal_results()
@@ -767,7 +766,6 @@ def main():
                 "daily_loss_pct":0,
             }
 
-            # Push state to Supabase
             sb_upsert("bot_state", {
                 "id":         1,
                 "updated_at": datetime.now(timezone.utc).isoformat(),
@@ -784,7 +782,6 @@ def main():
                 lot = calc_lot(sig["entry"], sig["sl"], sig["score"])
                 add_log(f"🔔 SIGNAL {sig['direction'].upper()} @ {sig['entry']}  score:{sig['score']}  lot:{lot}")
 
-                # Save signal to Supabase
                 sb_insert("signals", {
                     "direction":    sig["direction"],
                     "entry":        sig["entry"],
@@ -803,7 +800,6 @@ def main():
                     "executed":     False,
                 })
 
-                # Telegram notification
                 send_telegram(format_signal_msg(sig, lot))
             else:
                 add_log("— No signal this cycle")
