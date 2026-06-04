@@ -372,6 +372,41 @@ def get_regime(df):
 
 
 # ─────────────────────────────────────────────────────────
+#  4H TREND FILTER — kauple ainult trendi suunas
+# ─────────────────────────────────────────────────────────
+
+def get_4h_trend(tf_data: dict) -> str:
+    """
+    Määrab 4h timeframe'i põhjal üldise trendi.
+    Tagastab: "bull", "bear", või "neutral"
+
+    Loogika:
+    - EMA20 > EMA50 > EMA100 ja hind > EMA20 → bull trend
+    - EMA20 < EMA50 < EMA100 ja hind < EMA20 → bear trend
+    - Muu → neutral (kaupleme mõlemas suunas)
+    """
+    try:
+        df4h = tf_data.get("4h")
+        if df4h is None or len(df4h) < 100:
+            return "neutral"
+        d = add_indicators(df4h)
+        last = d.iloc[-1]
+        e20, e50, e100 = float(last.ema20), float(last.ema50), float(last.ema100)
+        close = float(last.close)
+        macd  = float(last.macd)
+        msig  = float(last.macd_sig)
+
+        if e20 > e50 > e100 and close > e20 and macd > msig:
+            return "bull"
+        elif e20 < e50 < e100 and close < e20 and macd < msig:
+            return "bear"
+        return "neutral"
+    except Exception as e:
+        logger.error(f"4h trend error: {e}")
+        return "neutral"
+
+
+# ─────────────────────────────────────────────────────────
 #  DATA  (yfinance)
 # ─────────────────────────────────────────────────────────
 
@@ -414,20 +449,14 @@ def get_price():
     return 0.0, 0.0
 
 def get_candles_since(created_dt: datetime) -> pd.DataFrame | None:
-    """
-    Laeb 1-minutilised küünlad signaali loomisest kuni praeguse hetkeni.
-    Kasutatakse täpseks TP/SL kontrolliks — näeme kas hind KAI läbi taseme.
-    """
     try:
         import yfinance as yf
         age_hours = (datetime.now(timezone.utc) - created_dt).total_seconds() / 3600
-        # yfinance 1m andmed saadaval kuni 7 päeva
         period = "1d" if age_hours <= 24 else "5d" if age_hours <= 120 else "7d"
         df = yf.Ticker("GC=F").history(interval="1m", period=period, auto_adjust=True)
         if df is None or df.empty:
             return None
         df.columns = [c.lower() for c in df.columns]
-        # Filtreeri ainult signaali loomisest alates
         df.index = pd.to_datetime(df.index, utc=True)
         df = df[df.index >= created_dt]
         return df if len(df) > 0 else None
@@ -575,6 +604,17 @@ def generate_signal(tf_data):
         add_log("— No signal: neutral MTF")
         return None
 
+    # ── 4H TREND FILTER — kauple ainult trendi suunas
+    trend_4h = get_4h_trend(tf_data)
+    if trend_4h == "bull" and bias == "sell":
+        add_log(f"— No signal: 4h bull trend — SELL blokeeritud")
+        return None
+    if trend_4h == "bear" and bias == "buy":
+        add_log(f"— No signal: 4h bear trend — BUY blokeeritud")
+        return None
+    if trend_4h != "neutral":
+        add_log(f"📈 4h trend: {trend_4h} — {bias.upper()} lubatud")
+
     regime, reg_str = get_regime(df)
     if regime=="ranging" and reg_str>80:
         add_log(f"— No signal: strong ranging ({reg_str:.0f})")
@@ -617,6 +657,7 @@ def generate_signal(tf_data):
         "smc_bonus":     0,
         "mtf_detail":    mtf_detail,
         "dxy_bias":      dxy_bias,
+        "trend_4h":      trend_4h,
         "timestamp":     datetime.now(timezone.utc).isoformat(),
     }
 
@@ -628,16 +669,6 @@ def generate_signal(tf_data):
 RISK_PER_TRADE = 1.0
 
 def check_signal_results():
-    """
-    TP/SL kontroll 1-minutiliste küünaldega.
-    Laeb kõik küünlad signaali loomisest alates ja kontrollib
-    kas hind KAI läbi TP või SL taseme — mitte ainult hetke hinda.
-
-    Järjestus on kriitiline:
-    - Vaatame küünlad kronoloogilises järjekorras
-    - Esimene tase mis puudutatakse (TP või SL) = tulemus
-    - Breakeven: kui hind liikus 1x ATR kasumi suunas enne SL-i → SL = entry
-    """
     try:
         signals = sb_select("signals", "executed=eq.false&order=created_at.desc&limit=20")
         for sig in signals:
@@ -653,7 +684,6 @@ def check_signal_results():
             breakeven = sig.get("breakeven", False)
             effective_sl = entry if breakeven else sl
 
-            # Signaal aegub SIGNAL_EXPIRY_HOURS pärast
             if age_hours >= SIGNAL_EXPIRY_HOURS:
                 sb_upsert("signals", {"id": sig_id, "executed": True})
                 add_log(f"⏰ Signal expired: {direction.upper()} @ {entry} ({age_hours:.1f}h old)")
@@ -665,10 +695,8 @@ def check_signal_results():
                 )
                 continue
 
-            # Lae 1-minutilised küünlad signaali loomisest alates
             candles = get_candles_since(created)
             if candles is None or len(candles) == 0:
-                # Fallback: kasuta hetke hinda kui küünlad pole saadaval
                 prices = sb_select("bot_state", "id=eq.1")
                 if not prices: continue
                 current = float(prices[0].get("price", 0))
@@ -679,16 +707,12 @@ def check_signal_results():
                 candles_highs = candles["high"].tolist()
                 candles_lows  = candles["low"].tolist()
 
-            # Käi küünlad läbi kronoloogilises järjekorras
-            # Leia esimene küünal kus TP või SL puudutati
             result    = None
             hit_price = None
             hit_time  = None
-
             candle_index = candles.index.tolist() if candles is not None and len(candles) > 0 else []
 
             for i, (high, low) in enumerate(zip(candles_highs, candles_lows)):
-                # Breakeven kontroll — kui hind liikus 1x ATR kasumi suunas
                 if not breakeven:
                     if direction == "buy" and high >= entry + atr:
                         breakeven    = True
@@ -703,7 +727,6 @@ def check_signal_results():
                         add_log(f"🔒 Breakeven: SELL {entry} → SL = entry")
                         send_telegram(f"🔒 <b>Breakeven aktiveeritud</b>\nSELL @ {entry} — SL liigutati entry peale")
 
-                # TP/SL kontroll — kumb puudutati esimesena selles küünlas?
                 if direction == "buy":
                     tp_hit = high >= tp
                     sl_hit = low  <= effective_sl
@@ -712,33 +735,23 @@ def check_signal_results():
                     sl_hit = high >= effective_sl
 
                 if tp_hit and sl_hit:
-                    # Mõlemad samas küünlas — konservatiivselt SL (halvem stsenaarium)
-                    result    = "SL"
-                    hit_price = effective_sl
-                    hit_time  = candle_index[i] if i < len(candle_index) else None
+                    result = "SL"; hit_price = effective_sl
+                    hit_time = candle_index[i] if i < len(candle_index) else None
                     break
                 elif tp_hit:
-                    result    = "TP"
-                    hit_price = tp
-                    hit_time  = candle_index[i] if i < len(candle_index) else None
+                    result = "TP"; hit_price = tp
+                    hit_time = candle_index[i] if i < len(candle_index) else None
                     break
                 elif sl_hit:
-                    result    = "SL"
-                    hit_price = effective_sl
-                    hit_time  = candle_index[i] if i < len(candle_index) else None
+                    result = "SL"; hit_price = effective_sl
+                    hit_time = candle_index[i] if i < len(candle_index) else None
                     break
 
             if result:
                 balance = get_account_balance()
                 lot     = float(sig.get("lot", 0.01))
-
-                if result == "TP":
-                    pnl_pts = abs(tp - entry)
-                else:
-                    pnl_pts = -abs(effective_sl - entry)
-
+                pnl_pts = abs(tp-entry) if result=="TP" else -abs(effective_sl-entry)
                 pnl_eur = round(pnl_pts * lot * 100, 2)
-
                 hit_time_str = str(hit_time)[:16] if hit_time else "unknown"
                 add_log(f"📊 {result} hit @ {hit_price} (küünal: {hit_time_str})")
 
@@ -754,18 +767,15 @@ def check_signal_results():
                     "created_at": datetime.now(timezone.utc).isoformat(),
                 })
                 sb_upsert("signals", {"id": sig_id, "executed": True})
-
                 new_balance = round(balance + pnl_eur, 2)
                 sb_upsert("bot_state", {"id": 1, "balance": new_balance})
                 update_risk_after_trade(pnl_eur)
-
                 add_log(f"📊 Trade closed: {result}  PnL: {pnl_eur:+.2f}€  Balance: {new_balance:.2f}€")
                 send_telegram(
                     f"{'✅' if result=='TP' else '❌'} <b>Tehing suletud: {result}</b>\n"
                     f"{'BUY' if direction=='buy' else 'SELL'} @ {entry} → {result} @ {hit_price}\n"
                     f"PnL: <b>{pnl_eur:+.2f}€</b>  |  Balance: <b>{new_balance:.2f}€</b>"
                 )
-
     except Exception as e:
         logger.error(f"check_signal_results error: {e}")
 
@@ -816,6 +826,7 @@ def format_signal_msg(sig, lot):
     bar = "█"*(sig["score"]//10) + "░"*(10-sig["score"]//10)
     mtf = "\n".join(f"  {tf}: {v}" for tf,v in sig.get("mtf_detail",{}).items())
     dxy = sig.get("dxy_bias","neutral_dxy").replace("_dxy","").upper()
+    trend = sig.get("trend_4h","neutral").upper()
     balance    = get_account_balance()
     risk_eur   = round(balance * RISK_PER_TRADE / 100, 2)
     risk_state = get_risk_state()
@@ -834,7 +845,7 @@ def format_signal_msg(sig, lot):
         f"━━━━━━━━━━━━━━━━━━━━━\n"
         f"📊 Score: <b>{sig['score']}/100</b> [{bar}]\n"
         f"🔎 RSI:{sig['rsi']}  ADX:{sig['adx']}  ATR:{sig['atr']}\n"
-        f"💵 DXY: <b>{dxy}</b>\n"
+        f"💵 DXY: <b>{dxy}</b>  |  4H: <b>{trend}</b>\n"
         f"🌍 {sig['regime']} · {sig['session']}\n"
         f"━━━━━━━━━━━━━━━━━━━━━\n"
         f"🛡 Streak: {streak}/{MAX_LOSS_STREAK}  |  Daily loss: {daily_loss:.2f}€/{round(_BALANCE_DEFAULT*MAX_DAILY_LOSS_PCT/100,2)}€\n"
@@ -1010,12 +1021,13 @@ def main():
     add_log(f"💼 Starting balance: {balance:.2f}€")
     add_log(f"🛡 Risk limits: daily={MAX_DAILY_LOSS_PCT}%  drawdown={MAX_DRAWDOWN_PCT}%  max_open={MAX_OPEN_SIGNALS}  streak={MAX_LOSS_STREAK}")
     add_log(f"📏 Spread: {GOLD_SPREAD_POINTS} pts  |  Signal expiry: {SIGNAL_EXPIRY_HOURS}h")
+    add_log(f"📈 4H trend filter: AKTIIVNE — kaupleb ainult trendi suunas")
     send_telegram(
         f"🚀 <b>NEMSIS v2</b> — Cloud bot started\n"
         f"Signal-only mode | XAUUSD\n"
         f"💼 Balance: <b>{balance:.2f}€</b>\n"
         f"🛡 Daily loss: <b>{MAX_DAILY_LOSS_PCT}%</b>  |  Drawdown: <b>{MAX_DRAWDOWN_PCT}%</b>\n"
-        f"⏰ Signal expiry: <b>{SIGNAL_EXPIRY_HOURS}h</b>"
+        f"📈 4H trend filter: <b>AKTIIVNE</b>"
     )
 
     rows = sb_select("bot_state", "id=eq.1&select=balance")
