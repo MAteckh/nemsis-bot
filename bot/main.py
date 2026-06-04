@@ -372,51 +372,19 @@ def get_regime(df):
 
 
 # ─────────────────────────────────────────────────────────
-#  WEEKLY TREND FILTER — kõrgeim trend filter
-# ─────────────────────────────────────────────────────────
-
-def get_weekly_trend() -> str:
-    """
-    Laeb nädalaküünlad (1wk) ja määrab pikaajalise trendi.
-    Tagastab: "bull", "bear", või "neutral"
-
-    Loogika:
-    - Viimased 10 nädalaküünalt
-    - EMA10 > EMA20 nädalasel → bull
-    - EMA10 < EMA20 nädalasel → bear
-    - Lisaks: hind üle/alla 20-nädala EMA
-
-    Miks oluline: gold tõusis $2600 → $4500 2025-2026.
-    Ilma weekly filtrita bot müüb tõusvas turul → kaotus.
-    """
-    try:
-        import yfinance as yf
-        df = yf.Ticker("GC=F").history(interval="1wk", period="1y", auto_adjust=True)
-        if df is None or df.empty or len(df) < 20:
-            return "neutral"
-        df.columns = [c.lower() for c in df.columns]
-        closes = df["close"].dropna()
-        ema10 = float(closes.ewm(span=10, adjust=False).mean().iloc[-1])
-        ema20 = float(closes.ewm(span=20, adjust=False).mean().iloc[-1])
-        last  = float(closes.iloc[-1])
-        # Kahe viimase nädala suund
-        momentum = float(closes.iloc[-1]) - float(closes.iloc[-3])
-
-        if ema10 > ema20 and last > ema20:
-            return "bull"
-        elif ema10 < ema20 and last < ema20:
-            return "bear"
-        return "neutral"
-    except Exception as e:
-        logger.error(f"Weekly trend error: {e}")
-        return "neutral"
-
-
-# ─────────────────────────────────────────────────────────
-#  4H TREND FILTER
+#  4H TREND FILTER — kauple ainult trendi suunas
 # ─────────────────────────────────────────────────────────
 
 def get_4h_trend(tf_data: dict) -> str:
+    """
+    Määrab 4h timeframe'i põhjal üldise trendi.
+    Tagastab: "bull", "bear", või "neutral"
+
+    Loogika:
+    - EMA20 > EMA50 > EMA100 ja hind > EMA20 → bull trend
+    - EMA20 < EMA50 < EMA100 ja hind < EMA20 → bear trend
+    - Muu → neutral (kaupleme mõlemas suunas)
+    """
     try:
         df4h = tf_data.get("4h")
         if df4h is None or len(df4h) < 100:
@@ -427,6 +395,7 @@ def get_4h_trend(tf_data: dict) -> str:
         close = float(last.close)
         macd  = float(last.macd)
         msig  = float(last.macd_sig)
+
         if e20 > e50 > e100 and close > e20 and macd > msig:
             return "bull"
         elif e20 < e50 < e100 and close < e20 and macd < msig:
@@ -635,18 +604,7 @@ def generate_signal(tf_data):
         add_log("— No signal: neutral MTF")
         return None
 
-    # ── WEEKLY TREND FILTER — kõrgeim filter
-    trend_weekly = get_weekly_trend()
-    if trend_weekly == "bull" and bias == "sell":
-        add_log(f"— No signal: weekly bull trend — SELL blokeeritud")
-        return None
-    if trend_weekly == "bear" and bias == "buy":
-        add_log(f"— No signal: weekly bear trend — BUY blokeeritud")
-        return None
-    if trend_weekly != "neutral":
-        add_log(f"📅 Weekly trend: {trend_weekly} — {bias.upper()} lubatud")
-
-    # ── 4H TREND FILTER
+    # ── 4H TREND FILTER — kauple ainult trendi suunas
     trend_4h = get_4h_trend(tf_data)
     if trend_4h == "bull" and bias == "sell":
         add_log(f"— No signal: 4h bull trend — SELL blokeeritud")
@@ -683,25 +641,24 @@ def generate_signal(tf_data):
     rr    = round(abs(tp-price)/abs(sl-price), 2)
 
     return {
-        "direction":      bias,
-        "entry":          round(price,2),
-        "sl":             sl,
-        "tp":             tp,
-        "rr":             rr,
-        "atr":            round(atr,2),
-        "score":          score,
-        "score_reasons":  reasons,
-        "regime":         regime,
-        "session":        session_name,
-        "rsi":            round(float(rsi),1),
-        "macd":           round(float(last.macd),4),
-        "adx":            round(float(last.adx),1),
-        "smc_bonus":      0,
-        "mtf_detail":     mtf_detail,
-        "dxy_bias":       dxy_bias,
-        "trend_4h":       trend_4h,
-        "trend_weekly":   trend_weekly,
-        "timestamp":      datetime.now(timezone.utc).isoformat(),
+        "direction":     bias,
+        "entry":         round(price,2),
+        "sl":            sl,
+        "tp":            tp,
+        "rr":            rr,
+        "atr":           round(atr,2),
+        "score":         score,
+        "score_reasons": reasons,
+        "regime":        regime,
+        "session":       session_name,
+        "rsi":           round(float(rsi),1),
+        "macd":          round(float(last.macd),4),
+        "adx":           round(float(last.adx),1),
+        "smc_bonus":     0,
+        "mtf_detail":    mtf_detail,
+        "dxy_bias":      dxy_bias,
+        "trend_4h":      trend_4h,
+        "timestamp":     datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -868,9 +825,8 @@ def format_signal_msg(sig, lot):
     e   = "🟢" if d=="buy" else "🔴"
     bar = "█"*(sig["score"]//10) + "░"*(10-sig["score"]//10)
     mtf = "\n".join(f"  {tf}: {v}" for tf,v in sig.get("mtf_detail",{}).items())
-    dxy     = sig.get("dxy_bias","neutral_dxy").replace("_dxy","").upper()
-    trend4h = sig.get("trend_4h","neutral").upper()
-    trendwk = sig.get("trend_weekly","neutral").upper()
+    dxy = sig.get("dxy_bias","neutral_dxy").replace("_dxy","").upper()
+    trend = sig.get("trend_4h","neutral").upper()
     balance    = get_account_balance()
     risk_eur   = round(balance * RISK_PER_TRADE / 100, 2)
     risk_state = get_risk_state()
@@ -889,7 +845,7 @@ def format_signal_msg(sig, lot):
         f"━━━━━━━━━━━━━━━━━━━━━\n"
         f"📊 Score: <b>{sig['score']}/100</b> [{bar}]\n"
         f"🔎 RSI:{sig['rsi']}  ADX:{sig['adx']}  ATR:{sig['atr']}\n"
-        f"💵 DXY: <b>{dxy}</b>  |  4H: <b>{trend4h}</b>  |  WK: <b>{trendwk}</b>\n"
+        f"💵 DXY: <b>{dxy}</b>  |  4H: <b>{trend}</b>\n"
         f"🌍 {sig['regime']} · {sig['session']}\n"
         f"━━━━━━━━━━━━━━━━━━━━━\n"
         f"🛡 Streak: {streak}/{MAX_LOSS_STREAK}  |  Daily loss: {daily_loss:.2f}€/{round(_BALANCE_DEFAULT*MAX_DAILY_LOSS_PCT/100,2)}€\n"
@@ -1065,13 +1021,13 @@ def main():
     add_log(f"💼 Starting balance: {balance:.2f}€")
     add_log(f"🛡 Risk limits: daily={MAX_DAILY_LOSS_PCT}%  drawdown={MAX_DRAWDOWN_PCT}%  max_open={MAX_OPEN_SIGNALS}  streak={MAX_LOSS_STREAK}")
     add_log(f"📏 Spread: {GOLD_SPREAD_POINTS} pts  |  Signal expiry: {SIGNAL_EXPIRY_HOURS}h")
-    add_log(f"📅 Weekly + 4H trend filter: AKTIIVNE")
+    add_log(f"📈 4H trend filter: AKTIIVNE — kaupleb ainult trendi suunas")
     send_telegram(
         f"🚀 <b>NEMSIS v2</b> — Cloud bot started\n"
         f"Signal-only mode | XAUUSD\n"
         f"💼 Balance: <b>{balance:.2f}€</b>\n"
         f"🛡 Daily loss: <b>{MAX_DAILY_LOSS_PCT}%</b>  |  Drawdown: <b>{MAX_DRAWDOWN_PCT}%</b>\n"
-        f"📅 Weekly + 4H trend filter: <b>AKTIIVNE</b>"
+        f"📈 4H trend filter: <b>AKTIIVNE</b>"
     )
 
     rows = sb_select("bot_state", "id=eq.1&select=balance")
