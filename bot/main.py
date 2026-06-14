@@ -218,6 +218,10 @@ def check_and_trade(price, high, low, trend):
 
     # ── Initsialiseeri grid kui pole veel ────────────────
     if grid_state is None:
+        # Oota kuni trend on selge — ära ava neutral gridi
+        if trend == "neutral":
+            add_log(f"⏳ Ootan selget trendi... (praegu neutral)")
+            return
         center = round(price / GRID_SIZE) * GRID_SIZE
         pending = setup_grid(center, trend)
         grid_state = {
