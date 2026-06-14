@@ -22,6 +22,7 @@ TELEGRAM_TOKEN   = os.environ.get("TELEGRAM_TOKEN", "7502951774:AAFEdMlowZumpFlL
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "7638697143")
 SCAN_INTERVAL    = int(os.environ.get("SCAN_INTERVAL", "300"))  # 5 min
 ACCOUNT_BALANCE  = float(os.environ.get("ACCOUNT_BALANCE", "500"))
+TWELVEDATA_KEY   = os.environ.get("TWELVEDATA_KEY", "74935ad641d14749a66009b4abc84ce7")
 
 # ── Grid parameetrid (optimeeritud) ──────────────────────
 GRID_SIZE      = 10.0    # $ sammud
@@ -115,32 +116,66 @@ def send_telegram(text):
 # ─────────────────────────────────────────────────────────
 
 _data_cache = {"df": None, "updated": 0}
+_price_cache = {"price": 0.0, "updated": 0}
 
 def get_gold_data():
+    """Laeb 1h andmed TwelveData API-st."""
     global _data_cache
     now = time.time()
     if now - _data_cache["updated"] < 300 and _data_cache["df"] is not None:
         return _data_cache["df"]
     try:
-        import yfinance as yf
-        df = yf.Ticker("GC=F").history(interval="1h", period="7d", auto_adjust=True)
-        if df is None or df.empty: return _data_cache["df"]
-        df.columns = [c.lower() for c in df.columns]
-        df.index = pd.to_datetime(df.index, utc=True)
+        url = f"https://api.twelvedata.com/time_series"
+        params = {
+            "symbol":     "XAU/USD",
+            "interval":   "1h",
+            "outputsize": 100,
+            "apikey":     TWELVEDATA_KEY,
+        }
+        r = requests.get(url, params=params, timeout=15)
+        data = r.json()
+        if data.get("status") == "error":
+            logger.error(f"TwelveData error: {data.get('message')}")
+            return _data_cache["df"]
+        values = data.get("values", [])
+        if not values:
+            return _data_cache["df"]
+        rows = []
+        for v in reversed(values):
+            rows.append({
+                "open":   float(v["open"]),
+                "high":   float(v["high"]),
+                "low":    float(v["low"]),
+                "close":  float(v["close"]),
+                "volume": 0,
+            })
+        df = pd.DataFrame(rows)
+        df.index = pd.to_datetime([v["datetime"] for v in reversed(values)], utc=True)
         _data_cache = {"df": df, "updated": now}
+        add_log(f"📡 TwelveData: {len(df)} küünalt laetud")
         return df
     except Exception as e:
-        logger.error(f"Data error: {e}")
+        logger.error(f"TwelveData data error: {e}")
         return _data_cache["df"]
 
 def get_current_price():
+    """Laeb hetke hinna TwelveData API-st."""
+    global _price_cache
+    now = time.time()
+    if now - _price_cache["updated"] < 60 and _price_cache["price"] > 0:
+        return _price_cache["price"]
     try:
-        import yfinance as yf
-        df = yf.Ticker("GC=F").history(interval="1m", period="1d", auto_adjust=True)
-        if df is not None and not df.empty:
-            return float(df["Close"].iloc[-1])
-    except: pass
-    return 0.0
+        url = f"https://api.twelvedata.com/price"
+        params = {"symbol": "XAU/USD", "apikey": TWELVEDATA_KEY}
+        r = requests.get(url, params=params, timeout=10)
+        data = r.json()
+        price = float(data.get("price", 0))
+        if price > 0:
+            _price_cache = {"price": price, "updated": now}
+            return price
+    except Exception as e:
+        logger.error(f"TwelveData price error: {e}")
+    return _price_cache["price"]
 
 
 # ─────────────────────────────────────────────────────────
