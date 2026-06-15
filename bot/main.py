@@ -573,7 +573,7 @@ def main():
             })
 
             # Iga 24h saada kokkuvõte
-            if scan_count % (24*12) == 0:  # iga ~24h (12 skanni tunnis)
+            if now.hour == 8 and now.minute == 0:  # iga ~24h (12 skanni tunnis)
                 stats = get_stats()
                 send_telegram(
                     f"📊 <b>Päevane kokkuvõte</b>\n"
