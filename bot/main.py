@@ -25,7 +25,7 @@ ACCOUNT_BALANCE  = float(os.environ.get("ACCOUNT_BALANCE", "500"))
 TWELVEDATA_KEY   = os.environ.get("TWELVEDATA_KEY", "74935ad641d14749a66009b4abc84ce7")
 
 # ── Grid parameetrid (optimeeritud) ──────────────────────
-GRID_SIZE      = 10.0    # $ sammud
+GRID_SIZE      = 30.0    # $ sammud
 GRID_LEVELS    = 8       # taset ühes suunas
 LOT_SIZE       = 0.01    # algne lot per 500€
 MAX_FLOAT_LOSS = 100.0   # € max floating loss per positsioon (500€ kontol)
