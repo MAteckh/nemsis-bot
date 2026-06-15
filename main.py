@@ -25,16 +25,48 @@ ACCOUNT_BALANCE  = float(os.environ.get("ACCOUNT_BALANCE", "500"))
 TWELVEDATA_KEY   = os.environ.get("TWELVEDATA_KEY", "74935ad641d14749a66009b4abc84ce7")
 
 # ── Grid parameetrid (optimeeritud) ──────────────────────
-GRID_SIZE      = 30.0    # $ sammud
+GRID_SIZE      = 30.0    # $ sammud (optimeeritud — $30 grid parim goldile)
 GRID_LEVELS    = 8       # taset ühes suunas
 LOT_SIZE       = 0.01    # algne lot per 500€
 MAX_FLOAT_LOSS = 100.0   # € max floating loss per positsioon (500€ kontol)
 TREND_PERIOD   = 50      # tundi trend määramiseks
 TREND_THRESH   = 1.5     # % muutus trendi kinnitamiseks
+VOL_PERIOD     = 20      # küünlad ATR keskmise jaoks
+VOL_THRESH     = 1.3     # ATR > 1.3x keskmine → kõrge volatiilsus
+VOL_BOOST      = 1.5     # lot multiplier kõrge volatiilsuse ajal
+
+# ATR cache volatiilsuse filtri jaoks
+_atr_history = []
+
+def calc_current_atr(df):
+    """Arvutab hetke ATR ja võrdleb keskmisega."""
+    try:
+        if len(df) < 15: return 1.0
+        hl = df["high"] - df["low"]
+        hc = (df["high"] - df["close"].shift()).abs()
+        lc = (df["low"]  - df["close"].shift()).abs()
+        tr = pd.concat([hl,hc,lc],axis=1).max(axis=1)
+        atr = float(tr.tail(14).mean())
+        _atr_history.append(atr)
+        if len(_atr_history) > 100: _atr_history.pop(0)
+        return atr
+    except:
+        return 1.0
+
+def get_vol_multiplier():
+    """Volatiilsuse multiplier — kõrge ATR → suurem lot."""
+    if len(_atr_history) < VOL_PERIOD: return 1.0
+    avg_atr = sum(_atr_history[-VOL_PERIOD:]) / VOL_PERIOD
+    current = _atr_history[-1] if _atr_history else avg_atr
+    if current > avg_atr * VOL_THRESH:
+        return VOL_BOOST
+    return 1.0
 
 def get_compound_lot(balance):
-    """Compound: lot kasvab koos kontoga. Algab 0.01 per 500€."""
-    return round(max(LOT_SIZE, (balance / ACCOUNT_BALANCE) * LOT_SIZE), 3)
+    """Compound + volatiilsus: lot kasvab koos kontoga ja volatiilsusega."""
+    base = round(max(LOT_SIZE, (balance / ACCOUNT_BALANCE) * LOT_SIZE), 3)
+    vol  = get_vol_multiplier()
+    return round(base * vol, 3)
 
 def get_scaled_max_float(balance):
     """Max floating loss skaleerub koos kontoga."""
@@ -494,6 +526,12 @@ def main():
             price = get_current_price()
             if price == 0:
                 price = float(df["close"].iloc[-1])
+
+            # Volatiilsuse filter — uuenda ATR
+            calc_current_atr(df)
+            vol_mult = get_vol_multiplier()
+            if vol_mult > 1.0:
+                add_log(f"⚡ Kõrge volatiilsus — lot {vol_mult}x")
 
             # High/low viimase tunni jooksul
             high = float(df["high"].iloc[-1])
