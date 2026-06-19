@@ -279,7 +279,9 @@ def setup_grid(center, trend):
 #  GRID LOOGIKA
 # ─────────────────────────────────────────────────────────
 
-def check_and_trade(price, high, low, trend):
+def atr_val = float(_atr_history[-1]) if _atr_history else 20.0
+session = \ london\ if 7 <= datetime.now(timezone.utc).hour < 13 else \new_york\ if 13 <= datetime.now(timezone.utc).hour < 20 else \asia\
+atr_val = float(_atr_history[-1]) if _atr_history else 20.0\r\n            session = \ london\ if 7 <= now.hour < 13 else \new_york\ if 13 <= now.hour < 20 else \asia\\r\n            claude_bias, _ = get_claude_bias(price, trend, atr_val, session)\r\n            effective_trend = \bull\ if claude_bias==\buy\ and trend==\neutral\ else \bear\ if claude_bias==\sell\ and trend==\neutral\ else trend\r\n            check_and_trade(price, high, low, effective_trend):
     """
     Peamine grid loogika:
     1. Kontrolli kas pending order triggerdus
@@ -543,7 +545,9 @@ def main():
             add_log(f"💰 Gold: ${price:.2f} | Trend: {trend} | H: {high:.2f} L: {low:.2f}")
 
             # Grid loogika
-            check_and_trade(price, high, low, trend)
+            atr_val = float(_atr_history[-1]) if _atr_history else 20.0
+session = \ london\ if 7 <= datetime.now(timezone.utc).hour < 13 else \new_york\ if 13 <= datetime.now(timezone.utc).hour < 20 else \asia\
+atr_val = float(_atr_history[-1]) if _atr_history else 20.0\r\n            session = \ london\ if 7 <= now.hour < 13 else \new_york\ if 13 <= now.hour < 20 else \asia\\r\n            claude_bias, _ = get_claude_bias(price, trend, atr_val, session)\r\n            effective_trend = \bull\ if claude_bias==\buy\ and trend==\neutral\ else \bear\ if claude_bias==\sell\ and trend==\neutral\ else trend\r\n            check_and_trade(price, high, low, effective_trend)
 
             # Uuenda dashboard
             balance = get_balance()
@@ -592,3 +596,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
