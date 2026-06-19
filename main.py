@@ -8,6 +8,7 @@ Strateegia: Trend-Aware Grid Trading
 - Neutral → mõlemad suunad
 - Max floating loss kaitse
 - Auto grid reset kui trend muutub
+- Claude AI analüüs iga 30 min
 """
 
 import sys, os, json, time, logging, requests
@@ -20,26 +21,29 @@ SUPABASE_URL     = os.environ.get("SUPABASE_URL", "https://xqinzjaqorjqaexeoyqc.
 SUPABASE_KEY     = os.environ.get("SUPABASE_KEY", "sb_secret_geYNl5euHLVWXQtone_N0g_K5nB0Zel")
 TELEGRAM_TOKEN   = os.environ.get("TELEGRAM_TOKEN", "7502951774:AAFEdMlowZumpFlLm817UEP4ws40SeZtROo")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "7638697143")
-SCAN_INTERVAL    = int(os.environ.get("SCAN_INTERVAL", "300"))  # 5 min
+SCAN_INTERVAL    = int(os.environ.get("SCAN_INTERVAL", "60"))
 ACCOUNT_BALANCE  = float(os.environ.get("ACCOUNT_BALANCE", "500"))
 TWELVEDATA_KEY   = os.environ.get("TWELVEDATA_KEY", "74935ad641d14749a66009b4abc84ce7")
+ANTHROPIC_KEY    = os.environ.get("ANTHROPIC_KEY", "")
 
 # ── Grid parameetrid (optimeeritud) ──────────────────────
-GRID_SIZE      = 30.0    # $ sammud (optimeeritud — $30 grid parim goldile)
-GRID_LEVELS    = 8       # taset ühes suunas
-LOT_SIZE       = 0.01    # algne lot per 500€
-MAX_FLOAT_LOSS = 100.0   # € max floating loss per positsioon (500€ kontol)
-TREND_PERIOD   = 50      # tundi trend määramiseks
-TREND_THRESH   = 3.0     # % muutus trendi kinnitamiseks
-VOL_PERIOD     = 20      # küünlad ATR keskmise jaoks
-VOL_THRESH     = 1.3     # ATR > 1.3x keskmine → kõrge volatiilsus
-VOL_BOOST      = 1.5     # lot multiplier kõrge volatiilsuse ajal
+GRID_SIZE      = 30.0
+GRID_LEVELS    = 8
+LOT_SIZE       = 0.01
+MAX_FLOAT_LOSS = 100.0
+TREND_PERIOD   = 50
+TREND_THRESH   = 3.0
+VOL_PERIOD     = 20
+VOL_THRESH     = 1.3
+VOL_BOOST      = 1.5
 
-# ATR cache volatiilsuse filtri jaoks
+# ATR cache
 _atr_history = []
 
+# Claude AI cache
+_claude_cache = {"bias": "neutral", "reason": "", "updated": 0}
+
 def calc_current_atr(df):
-    """Arvutab hetke ATR ja võrdleb keskmisega."""
     try:
         if len(df) < 15: return 1.0
         hl = df["high"] - df["low"]
@@ -54,7 +58,6 @@ def calc_current_atr(df):
         return 1.0
 
 def get_vol_multiplier():
-    """Volatiilsuse multiplier — kõrge ATR → suurem lot."""
     if len(_atr_history) < VOL_PERIOD: return 1.0
     avg_atr = sum(_atr_history[-VOL_PERIOD:]) / VOL_PERIOD
     current = _atr_history[-1] if _atr_history else avg_atr
@@ -63,14 +66,41 @@ def get_vol_multiplier():
     return 1.0
 
 def get_compound_lot(balance):
-    """Compound + volatiilsus: lot kasvab koos kontoga ja volatiilsusega."""
     base = round(max(LOT_SIZE, (balance / ACCOUNT_BALANCE) * LOT_SIZE), 3)
     vol  = get_vol_multiplier()
     return round(base * vol, 3)
 
 def get_scaled_max_float(balance):
-    """Max floating loss skaleerub koos kontoga."""
     return MAX_FLOAT_LOSS * (balance / ACCOUNT_BALANCE)
+
+def get_claude_bias(price, trend, atr, session):
+    """Claude AI analüüs iga 30 min."""
+    global _claude_cache
+    now = time.time()
+    if now - _claude_cache["updated"] < 30*60:
+        return _claude_cache["bias"], _claude_cache["reason"]
+    if not ANTHROPIC_KEY:
+        return "neutral", "Key puudub"
+    try:
+        prompt = f"""Oled gold trader. Analüüsi lühidalt:
+Gold: ${price:.0f} | Trend: {trend} | ATR: ${atr:.1f} | Sessioon: {session}
+Vasta AINULT JSON: {{"bias":"buy/sell/neutral","confidence":0-100,"reason":"eesti keeles lühidalt","avoid":true/false}}"""
+        r = requests.post("https://api.anthropic.com/v1/messages",
+            headers={"x-api-key":ANTHROPIC_KEY,"anthropic-version":"2023-06-01","content-type":"application/json"},
+            json={"model":"claude-sonnet-4-6","max_tokens":150,"messages":[{"role":"user","content":prompt}]},
+            timeout=30)
+        text = r.json()["content"][0]["text"].replace("```json","").replace("```","").strip()
+        res  = json.loads(text)
+        bias = "neutral" if res.get("avoid") else res.get("bias","neutral")
+        reason = res.get("reason","")
+        confidence = res.get("confidence", 50)
+        _claude_cache = {"bias":bias,"reason":reason,"updated":now}
+        add_log(f"🤖 Claude: {bias} ({confidence}%) — {reason[:40]}")
+        send_telegram(f"🤖 <b>Claude AI Analüüs</b>\nBias: <b>{bias.upper()}</b> ({confidence}%)\n{reason}")
+        return bias, reason
+    except Exception as e:
+        logger.error(f"Claude error: {e}")
+        return "neutral", ""
 
 logging.basicConfig(
     level=logging.INFO,
@@ -159,7 +189,6 @@ _data_cache = {"df": None, "updated": 0}
 _price_cache = {"price": 0.0, "updated": 0}
 
 def get_gold_data():
-    """Laeb 1h andmed TwelveData API-st."""
     global _data_cache
     now = time.time()
     if now - _data_cache["updated"] < 300 and _data_cache["df"] is not None:
@@ -199,7 +228,6 @@ def get_gold_data():
         return _data_cache["df"]
 
 def get_current_price():
-    """Laeb hetke hinna TwelveData API-st."""
     global _price_cache
     now = time.time()
     if now - _price_cache["updated"] < 60 and _price_cache["price"] > 0:
@@ -223,7 +251,6 @@ def get_current_price():
 # ─────────────────────────────────────────────────────────
 
 def get_trend(df):
-    """Trend: hind vs TREND_PERIOD tundi tagasi."""
     if df is None or len(df) < TREND_PERIOD + 2:
         return "neutral"
     now = float(df["close"].iloc[-1])
@@ -239,7 +266,6 @@ def get_trend(df):
 # ─────────────────────────────────────────────────────────
 
 def get_grid_state():
-    """Laeb grid state Supabase'ist."""
     rows = sb_select("bot_state", "id=eq.1&select=risk")
     if rows and rows[0].get("risk"):
         state = rows[0]["risk"]
@@ -248,11 +274,18 @@ def get_grid_state():
     return None
 
 def save_grid_state(state):
-    """Salvestab grid state Supabase'i."""
-    sb_upsert("bot_state", {"id": 1, "risk": {"grid": state}})
+    try:
+        rows = sb_select("bot_state", "id=eq.1&select=risk")
+        existing_risk = {}
+        if rows and rows[0].get("risk"):
+            existing_risk = rows[0]["risk"]
+        existing_risk["grid"] = state
+        sb_upsert("bot_state", {"id": 1, "risk": existing_risk})
+    except Exception as e:
+        logger.error(f"save_grid_state error: {e}")
+        sb_upsert("bot_state", {"id": 1, "risk": {"grid": state}})
 
 def get_open_positions():
-    """Laeb avatud grid positsioonid."""
     return sb_select("signals", "executed=eq.false&order=created_at.asc")
 
 def get_balance():
@@ -262,7 +295,6 @@ def get_balance():
     return ACCOUNT_BALANCE
 
 def setup_grid(center, trend):
-    """Loob grid tasemed vastavalt trendile."""
     pending = {}
     if trend in ("bull", "neutral"):
         for i in range(1, GRID_LEVELS + 1):
@@ -279,9 +311,7 @@ def setup_grid(center, trend):
 #  GRID LOOGIKA
 # ─────────────────────────────────────────────────────────
 
-atr_val = float(_atr_history[-1]) if _atr_history else 20.0
-session = \ london\ if 7 <= datetime.now(timezone.utc).hour < 13 else \new_york\ if 13 <= datetime.now(timezone.utc).hour < 20 else \asia\
-atr_val = float(_atr_history[-1]) if _atr_history else 20.0\r\n            session = \ london\ if 7 <= now.hour < 13 else \new_york\ if 13 <= now.hour < 20 else \asia\\r\n            claude_bias, _ = get_claude_bias(price, trend, atr_val, session)\r\n            effective_trend = \bull\ if claude_bias==\buy\ and trend==\neutral\ else \bear\ if claude_bias==\sell\ and trend==\neutral\ else trend\r\n            check_and_trade(price, high, low, effective_trend):
+def check_and_trade(price, high, low, trend):
     """
     Peamine grid loogika:
     1. Kontrolli kas pending order triggerdus
@@ -293,9 +323,7 @@ atr_val = float(_atr_history[-1]) if _atr_history else 20.0\r\n            sessi
     balance    = get_balance()
     now        = datetime.now(timezone.utc)
 
-    # ── Initsialiseeri grid kui pole veel ────────────────
     if grid_state is None:
-        # Oota kuni trend on selge — ära ava neutral gridi
         if trend == "neutral":
             add_log(f"⏳ Ootan selget trendi... (praegu neutral)")
             return
@@ -320,13 +348,9 @@ atr_val = float(_atr_history[-1]) if _atr_history else 20.0\r\n            sessi
 
     pending      = grid_state.get("pending", {})
     grid_trend   = grid_state.get("trend", "neutral")
-    grid_center  = grid_state.get("center", price)
 
-    # ── Trend muutus → reseta grid ───────────────────────
     if trend != grid_trend and trend != "neutral":
         add_log(f"🔄 Trend muutus {grid_trend} → {trend} — resetan gridi")
-
-        # Sulge kõik kahjumlikud avatud positsioonid
         open_pos = get_open_positions()
         closed_count = 0
         for pos in open_pos:
@@ -339,8 +363,6 @@ atr_val = float(_atr_history[-1]) if _atr_history else 20.0\r\n            sessi
                 sb_upsert("bot_state", {"id": 1, "balance": balance})
                 closed_count += 1
                 add_log(f"❌ Trend sulgemine: {direction.upper()} @ {entry:.0f}  PnL: {fl:+.2f}€")
-
-        # Uus grid
         new_center = round(price / GRID_SIZE) * GRID_SIZE
         new_pending = setup_grid(new_center, trend)
         grid_state = {
@@ -350,7 +372,6 @@ atr_val = float(_atr_history[-1]) if _atr_history else 20.0\r\n            sessi
             "reset_at": now.isoformat(),
         }
         save_grid_state(grid_state)
-
         send_telegram(
             f"🔄 <b>Grid reset — trend muutus</b>\n"
             f"{grid_trend.upper()} → {trend.upper()}\n"
@@ -360,7 +381,6 @@ atr_val = float(_atr_history[-1]) if _atr_history else 20.0\r\n            sessi
         )
         return
 
-    # ── Kontrolli avatud positsioonide TP ────────────────
     open_pos = get_open_positions()
     for pos in open_pos:
         entry     = float(pos.get("entry", 0))
@@ -368,24 +388,20 @@ atr_val = float(_atr_history[-1]) if _atr_history else 20.0\r\n            sessi
         direction = pos.get("direction", "buy")
         pos_id    = pos.get("id")
 
-        # TP kontroll
         tp_hit = (high >= tp) if direction=="buy" else (low <= tp)
         if tp_hit:
-            pnl = GRID_SIZE * LOT_SIZE * 100
+            lot = get_compound_lot(balance)
+            pnl = GRID_SIZE * lot * 100
             balance = round(balance + pnl, 2)
             sb_upsert("signals", {"id": pos_id, "executed": True})
             sb_upsert("bot_state", {"id": 1, "balance": balance})
-
-            add_log(f"✅ TP: {direction.upper()} @ {entry:.0f} → {tp:.0f}  +{pnl:.2f}€  Bal: {balance:.2f}€")
+            add_log(f"✅ TP: {direction.upper()} @ {entry:.0f} → {tp:.0f}  lot:{lot}  +{pnl:.2f}€  Bal: {balance:.2f}€")
             send_telegram(
                 f"✅ <b>Grid TP!</b>\n"
                 f"{direction.upper()} @ {entry:.0f} → {tp:.0f}\n"
-                f"PnL: <b>+{pnl:.2f}€</b>  |  Balance: <b>{balance:.2f}€</b>"
+                f"Lot: <b>{lot}</b>  PnL: <b>+{pnl:.2f}€</b>  |  Balance: <b>{balance:.2f}€</b>"
             )
-
-            # Lisa uus pending tase vastassuunas
             opp = "sell" if direction=="buy" else "buy"
-            # Ainult trendi suunas
             if trend=="bull" and opp=="sell": pass
             elif trend=="bear" and opp=="buy": pass
             else:
@@ -394,9 +410,9 @@ atr_val = float(_atr_history[-1]) if _atr_history else 20.0\r\n            sessi
                 save_grid_state(grid_state)
             continue
 
-        # Floating loss kaitse
         fl = (price-entry)*LOT_SIZE*100 if direction=="buy" else (entry-price)*LOT_SIZE*100
-        if fl < -MAX_FLOAT_LOSS:
+        scaled_max = get_scaled_max_float(balance)
+        if fl < -scaled_max:
             balance = round(balance + fl, 2)
             sb_upsert("signals", {"id": pos_id, "executed": True})
             sb_upsert("bot_state", {"id": 1, "balance": balance})
@@ -407,28 +423,18 @@ atr_val = float(_atr_history[-1]) if _atr_history else 20.0\r\n            sessi
                 f"Balance: <b>{balance:.2f}€</b>"
             )
 
-    # ── Kontrolli pending ordereid ────────────────────────
     triggered_levels = []
     for level_str, direction in list(pending.items()):
         level = float(level_str)
-
-        # Ainult trendi suunas
         if trend=="bull" and direction=="sell": continue
         if trend=="bear" and direction=="buy":  continue
-
-        # Triggerdus?
         hit = (direction=="buy" and low<=level) or (direction=="sell" and high>=level)
         if not hit: continue
-
-        # Max positsioonide arv
         open_same = [p for p in get_open_positions() if p.get("direction")==direction]
         if len(open_same) >= GRID_LEVELS:
             add_log(f"— Max {GRID_LEVELS} {direction} positsiooni — ei ava")
             continue
-
-        # Ava positsioon
         tp_level = round(level + GRID_SIZE if direction=="buy" else level - GRID_SIZE, 2)
-
         sb_insert("signals", {
             "direction":  direction,
             "entry":      level,
@@ -436,14 +442,13 @@ atr_val = float(_atr_history[-1]) if _atr_history else 20.0\r\n            sessi
             "tp":         tp_level,
             "rr":         3.0,
             "atr":        GRID_SIZE,
-            "lot":        LOT_SIZE,
+            "lot":        get_compound_lot(balance),
             "score":      0,
             "regime":     "grid",
             "session":    f"grid_{trend}",
             "executed":   False,
             "breakeven":  False,
         })
-
         triggered_levels.append(level_str)
         add_log(f"📊 Grid order: {direction.upper()} @ {level:.0f}  TP: {tp_level:.0f}")
         send_telegram(
@@ -453,7 +458,6 @@ atr_val = float(_atr_history[-1]) if _atr_history else 20.0\r\n            sessi
             f"Trend: {trend} | Balance: {balance:.2f}€"
         )
 
-    # Eemalda triggerdatud pending orderid
     for level_str in triggered_levels:
         if level_str in pending:
             del pending[level_str]
@@ -488,6 +492,7 @@ def main():
     add_log("🚀 NEMSIS v3 — Grid Trading Bot started")
     add_log(f"📐 Grid: ${GRID_SIZE} sammud | {GRID_LEVELS} taset | Lot: {LOT_SIZE}")
     add_log(f"🛡 Max float loss: ${MAX_FLOAT_LOSS}€ per positsioon")
+    add_log(f"🤖 Claude AI: {'AKTIIVNE' if ANTHROPIC_KEY else 'PUUDUB'}")
 
     balance = get_balance()
     add_log(f"💼 Balance: {balance:.2f}€")
@@ -498,13 +503,12 @@ def main():
         f"📐 Grid: <b>${GRID_SIZE:.0f}</b> sammud | <b>{GRID_LEVELS}</b> taset\n"
         f"🎯 TP: +${GRID_SIZE:.0f} per tehing\n"
         f"🛡 Max float: <b>{MAX_FLOAT_LOSS}€</b>\n"
+        f"🤖 Claude AI: <b>{'AKTIIVNE' if ANTHROPIC_KEY else 'PUUDUB'}</b>\n"
         f"💼 Balance: <b>{balance:.2f}€</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━\n"
-        f"Strateegia: Trend-Aware Grid Trading\n"
-        f"Bull → ainult BUY | Bear → ainult SELL"
+        f"Strateegia: Trend-Aware Grid + Claude AI"
     )
 
-    # Init bot_state kui pole
     rows = sb_select("bot_state", "id=eq.1&select=balance")
     if not rows or not rows[0].get("balance"):
         sb_upsert("bot_state", {"id": 1, "balance": balance})
@@ -517,39 +521,41 @@ def main():
             now = datetime.now(timezone.utc)
             add_log(f"⏱ Scan #{scan_count}...")
 
-            # Laen andmed
             df = get_gold_data()
             if df is None or len(df) < 10:
                 add_log("⚠️ Andmed puuduvad, ootan...")
                 time.sleep(SCAN_INTERVAL)
                 continue
 
-            # Hetke hind
             price = get_current_price()
             if price == 0:
                 price = float(df["close"].iloc[-1])
 
-            # Volatiilsuse filter — uuenda ATR
             calc_current_atr(df)
             vol_mult = get_vol_multiplier()
             if vol_mult > 1.0:
                 add_log(f"⚡ Kõrge volatiilsus — lot {vol_mult}x")
 
-            # High/low viimase tunni jooksul
             high = float(df["high"].iloc[-1])
             low  = float(df["low"].iloc[-1])
-
-            # Trend
             trend = get_trend(df)
 
             add_log(f"💰 Gold: ${price:.2f} | Trend: {trend} | H: {high:.2f} L: {low:.2f}")
 
-            # Grid loogika
+            # Claude AI analüüs iga 30 min
             atr_val = float(_atr_history[-1]) if _atr_history else 20.0
-session = \ london\ if 7 <= datetime.now(timezone.utc).hour < 13 else \new_york\ if 13 <= datetime.now(timezone.utc).hour < 20 else \asia\
-atr_val = float(_atr_history[-1]) if _atr_history else 20.0\r\n            session = \ london\ if 7 <= now.hour < 13 else \new_york\ if 13 <= now.hour < 20 else \asia\\r\n            claude_bias, _ = get_claude_bias(price, trend, atr_val, session)\r\n            effective_trend = \bull\ if claude_bias==\buy\ and trend==\neutral\ else \bear\ if claude_bias==\sell\ and trend==\neutral\ else trend\r\n            check_and_trade(price, high, low, effective_trend)
+            session = "london" if 7 <= now.hour < 13 else "new_york" if 13 <= now.hour < 20 else "asia"
+            claude_bias, _ = get_claude_bias(price, trend, atr_val, session)
 
-            # Uuenda dashboard
+            # Kui Claude ütleb buy/sell ja trend on neutral → kasuta Claude bias
+            effective_trend = trend
+            if claude_bias in ("buy", "sell") and trend == "neutral":
+                effective_trend = "bull" if claude_bias == "buy" else "bear"
+                add_log(f"🤖 Claude override: neutral → {effective_trend}")
+
+            # Grid loogika
+            check_and_trade(price, high, low, effective_trend)
+
             balance = get_balance()
             open_pos = get_open_positions()
             floating = sum(
@@ -572,20 +578,24 @@ atr_val = float(_atr_history[-1]) if _atr_history else 20.0\r\n            sessi
                     "floating":      round(floating, 2),
                     "open_positions": len(open_pos),
                     "trend":         trend,
+                    "claude_bias":   claude_bias,
                     "price":         round(price, 2),
                 }
             })
 
-            # Iga 24h saada kokkuvõte
-            if now.hour == 8 and now.minute == 0:  # iga ~24h (12 skanni tunnis)
-                stats = get_stats()
+            # Päevane kokkuvõte kell 8:00 UTC
+            if now.hour == 8 and now.minute == 0:
                 send_telegram(
-                    f"📊 <b>Päevane kokkuvõte</b>\n"
+                    f"🌅 <b>NEMSIS Päevane kokkuvõte</b>\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━\n"
                     f"💼 Balance: <b>{balance:.2f}€</b>\n"
-                    f"📈 Equity: <b>{round(balance+floating,2):.2f}€</b>\n"
-                    f"🔓 Avatud: <b>{len(open_pos)}</b> positsiooni\n"
+                    f"📊 Equity: <b>{round(balance+floating,2):.2f}€</b>\n"
                     f"📉 Floating: <b>{floating:+.2f}€</b>\n"
-                    f"📊 Trend: <b>{trend}</b>"
+                    f"🔓 Avatud: <b>{len(open_pos)}</b>\n"
+                    f"💰 Gold: <b>${price:.2f}</b>\n"
+                    f"📊 Trend: <b>{trend}</b>\n"
+                    f"🤖 Claude: <b>{claude_bias}</b>\n"
+                    f"⏰ {now.strftime('%d.%m.%Y')} UTC"
                 )
 
         except Exception as e:
@@ -596,4 +606,3 @@ atr_val = float(_atr_history[-1]) if _atr_history else 20.0\r\n            sessi
 
 if __name__ == "__main__":
     main()
-
