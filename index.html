@@ -5,547 +5,364 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>NEMSIS v4</title>
 <style>
-  :root {
-    --bg: #0a0a0f;
-    --bg2: #12121a;
-    --bg3: #1a1a26;
-    --gold: #f0b429;
-    --gold2: #ffd166;
-    --green: #06d6a0;
-    --red: #ef476f;
-    --blue: #118ab2;
-    --text: #e8e8f0;
-    --muted: #6b6b8a;
-    --border: #1e1e2e;
-  }
+@import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;700;900&display=swap');
+*{margin:0;padding:0;box-sizing:border-box;}
+:root{
+  --bg:#020202;--bg2:#080808;--bg3:#0f0005;
+  --red:#ff0022;--red2:#cc0018;--red3:#ff4455;
+  --gold:#e8a020;--green:#00ff88;--blue:#0088ff;
+  --text:#dddddd;--muted:#666666;--border:#1a0005;
+}
+body{
+  background:var(--bg);color:var(--text);
+  font-family:'Share Tech Mono',monospace;
+  min-height:100vh;overflow-x:hidden;
+}
+body::before{
+  content:'';position:fixed;top:0;left:0;right:0;bottom:0;
+  background:
+    repeating-linear-gradient(0deg,transparent,transparent 49px,rgba(255,0,34,0.03) 49px,rgba(255,0,34,0.03) 50px),
+    repeating-linear-gradient(90deg,transparent,transparent 49px,rgba(255,0,34,0.03) 49px,rgba(255,0,34,0.03) 50px);
+  pointer-events:none;z-index:0;
+}
+.wrap{position:relative;z-index:1;}
 
-  * { margin: 0; padding: 0; box-sizing: border-box; }
+/* SCANLINE EFFECT */
+body::after{
+  content:'';position:fixed;top:0;left:0;right:0;bottom:0;
+  background:repeating-linear-gradient(0deg,rgba(0,0,0,0.15),rgba(0,0,0,0.15) 1px,transparent 1px,transparent 2px);
+  pointer-events:none;z-index:999;
+}
 
-  body {
-    background: var(--bg);
-    color: var(--text);
-    font-family: 'SF Mono', 'Fira Code', monospace;
-    min-height: 100vh;
-  }
+/* HEADER */
+header{
+  background:linear-gradient(180deg,rgba(255,0,34,0.15) 0%,rgba(0,0,0,0) 100%);
+  border-bottom:2px solid var(--red2);
+  padding:1.5rem 2rem;
+  display:flex;align-items:center;justify-content:space-between;
+  position:relative;
+}
+header::after{
+  content:'';position:absolute;bottom:-2px;left:0;right:0;height:1px;
+  background:linear-gradient(90deg,transparent,var(--red),transparent);
+  animation:scan 3s linear infinite;
+}
+@keyframes scan{0%{background-position:-200% 0}100%{background-position:200% 0}}
 
-  /* HEADER */
-  header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 1rem 1.5rem;
-    border-bottom: 1px solid var(--border);
-    background: var(--bg2);
-  }
+.logo-wrap{display:flex;align-items:center;gap:16px;}
+.biohazard{font-size:2.5rem;animation:spin 8s linear infinite;display:inline-block;color:var(--red);filter:drop-shadow(0 0 8px var(--red));}
+@keyframes spin{0%{transform:rotate(0deg)}100%{transform:rotate(360deg)}}
+.logo-text{font-family:'Orbitron',sans-serif;}
+.logo-main{font-size:2rem;font-weight:900;letter-spacing:0.3em;color:var(--red);text-shadow:0 0 20px rgba(255,0,34,0.8),0 0 40px rgba(255,0,34,0.4);}
+.logo-sub{font-size:0.6rem;letter-spacing:0.25em;color:var(--muted);margin-top:2px;}
 
-  .logo {
-    font-size: 1.1rem;
-    font-weight: 700;
-    letter-spacing: 0.15em;
-    color: var(--gold);
-  }
+.header-right{display:flex;flex-direction:column;align-items:flex-end;gap:8px;}
+.threat-status{
+  font-family:'Orbitron',sans-serif;font-size:0.65rem;font-weight:700;
+  letter-spacing:0.2em;color:var(--red);
+  border:1px solid var(--red2);padding:4px 12px;
+  animation:blink-border 1s infinite;
+}
+@keyframes blink-border{0%,100%{border-color:var(--red2)}50%{border-color:transparent}}
+.live-dot{display:flex;align-items:center;gap:6px;font-size:0.65rem;color:var(--green);}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 8px var(--green);animation:pulse 1s infinite;}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}
+.scan-btn{
+  background:none;border:1px solid var(--red2);color:var(--red3);
+  padding:6px 16px;font-family:'Share Tech Mono',monospace;font-size:0.75rem;
+  letter-spacing:0.15em;cursor:pointer;transition:all 0.2s;text-transform:uppercase;
+}
+.scan-btn:hover{background:rgba(255,0,34,0.1);box-shadow:0 0 12px rgba(255,0,34,0.3);}
 
-  .logo span { color: var(--muted); font-weight: 400; }
+/* STATS */
+.stats-row{
+  display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));
+  gap:0;border:1px solid var(--border);border-top:none;
+  margin-bottom:0;
+}
+.stat{
+  background:var(--bg2);padding:1.25rem 1.5rem;
+  border-right:1px solid var(--border);position:relative;overflow:hidden;
+}
+.stat:last-child{border-right:none;}
+.stat::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;}
+.stat.red::before{background:linear-gradient(90deg,transparent,var(--red),transparent);}
+.stat.green::before{background:linear-gradient(90deg,transparent,var(--green),transparent);}
+.stat.gold::before{background:linear-gradient(90deg,transparent,var(--gold),transparent);}
+.stat.blue::before{background:linear-gradient(90deg,transparent,var(--blue),transparent);}
+.stat-label{font-size:0.6rem;letter-spacing:0.2em;color:var(--muted);text-transform:uppercase;margin-bottom:8px;}
+.stat-val{font-family:'Orbitron',sans-serif;font-size:1.6rem;font-weight:700;line-height:1;}
+.stat-val.red{color:var(--red);text-shadow:0 0 15px rgba(255,0,34,0.6);}
+.stat-val.green{color:var(--green);text-shadow:0 0 10px rgba(0,255,136,0.4);}
+.stat-val.gold{color:var(--gold);text-shadow:0 0 10px rgba(232,160,32,0.4);}
+.stat-val.blue{color:var(--blue);}
+.stat-sub{font-size:0.65rem;color:var(--muted);margin-top:6px;}
 
-  .status-dot {
-    width: 8px; height: 8px;
-    border-radius: 50%;
-    background: var(--green);
-    box-shadow: 0 0 6px var(--green);
-    animation: pulse 2s infinite;
-    display: inline-block;
-    margin-right: 6px;
-  }
+/* CLAUDE */
+.claude-box{
+  background:linear-gradient(135deg,rgba(136,0,255,0.08),rgba(0,0,0,0));
+  border:1px solid rgba(136,0,255,0.4);border-top:none;
+  padding:1rem 1.5rem;display:flex;align-items:center;gap:1rem;
+  margin-bottom:0;position:relative;overflow:hidden;
+}
+.claude-box::before{
+  content:'NEMSIS AI';position:absolute;right:2rem;
+  font-family:'Orbitron',sans-serif;font-size:3rem;font-weight:900;
+  color:rgba(136,0,255,0.06);letter-spacing:0.1em;pointer-events:none;
+}
+.ai-icon{font-size:1.8rem;color:#8800ff;filter:drop-shadow(0 0 8px #8800ff);flex-shrink:0;}
+.ai-bias{font-family:'Orbitron',sans-serif;font-size:1rem;font-weight:700;color:#aa44ff;letter-spacing:0.1em;}
+.ai-reason{font-size:0.75rem;color:var(--muted);margin-top:4px;max-width:600px;}
 
-  @keyframes pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.4; }
-  }
+/* SECTION DIVIDER */
+.sec-div{
+  border-top:1px solid var(--border);
+  padding:0.6rem 1.5rem;background:rgba(255,0,34,0.03);
+  display:flex;align-items:center;gap:12px;
+}
+.sec-div::before{content:'▶';color:var(--red);font-size:0.6rem;}
+.sec-title{font-size:0.65rem;letter-spacing:0.25em;color:var(--red3);text-transform:uppercase;font-family:'Orbitron',sans-serif;}
+.sec-line{flex:1;height:1px;background:linear-gradient(90deg,var(--border),transparent);}
 
-  .header-right {
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-    font-size: 0.75rem;
-    color: var(--muted);
-  }
+/* INSTRUMENTS */
+.inst-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:0;border:1px solid var(--border);border-top:none;}
+.inst{background:var(--bg2);padding:1rem 1.25rem;border-right:1px solid var(--border);border-bottom:1px solid var(--border);position:relative;overflow:hidden;transition:background 0.2s;}
+.inst:hover{background:var(--bg3);}
+.inst-gold{border-top:2px solid var(--gold);}
+.inst-forex{border-top:2px solid rgba(0,136,255,0.6);}
+.inst-top{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;}
+.inst-name{font-family:'Orbitron',sans-serif;font-size:0.8rem;font-weight:700;letter-spacing:0.05em;}
+.inst-tf{font-size:0.55rem;color:var(--muted);margin-top:3px;letter-spacing:0.1em;}
+.badge{font-size:0.55rem;padding:2px 8px;font-weight:700;letter-spacing:0.1em;border:1px solid;}
+.bb{background:rgba(0,255,136,0.08);color:var(--green);border-color:rgba(0,255,136,0.3);}
+.br{background:rgba(255,0,34,0.08);color:var(--red);border-color:rgba(255,0,34,0.3);}
+.bn{background:rgba(100,100,100,0.08);color:var(--muted);border-color:var(--border);}
+.bra{background:rgba(0,136,255,0.08);color:var(--blue);border-color:rgba(0,136,255,0.3);}
+.inst-price{font-family:'Orbitron',sans-serif;font-size:1.1rem;font-weight:700;margin-bottom:8px;}
+.gp{color:var(--gold);}
+.fp{color:var(--text);}
+.inst-bot{display:flex;justify-content:space-between;padding-top:8px;border-top:1px solid var(--border);font-size:0.6rem;}
+.inst-bot span{color:var(--muted);}
+.inst-bot b{color:var(--green);}
 
-  /* MAIN GRID */
-  .container { padding: 1.5rem; max-width: 1400px; margin: 0 auto; }
+/* TABLE */
+.tbl-wrap{border:1px solid var(--border);border-top:none;margin-bottom:0;overflow:hidden;}
+table{width:100%;border-collapse:collapse;font-size:0.75rem;}
+th{text-align:left;padding:8px 12px;font-size:0.6rem;letter-spacing:0.15em;color:var(--muted);text-transform:uppercase;border-bottom:1px solid var(--border);background:rgba(255,0,34,0.03);}
+td{padding:8px 12px;border-bottom:1px solid rgba(26,0,5,0.8);}
+tr:hover td{background:rgba(255,0,34,0.03);}
+.buy{color:var(--green);}
+.sell{color:var(--red);}
+.tp-val{color:var(--green);}
 
-  /* BALANCE ROW */
-  .balance-row {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-    gap: 1rem;
-    margin-bottom: 1.5rem;
-  }
+/* BOTTOM */
+.btm{display:grid;grid-template-columns:1fr 1fr;gap:0;border:1px solid var(--border);border-top:none;}
+@media(max-width:700px){.btm{grid-template-columns:1fr;}}
+.btm-panel{padding:1.25rem 1.5rem;}
+.btm-panel+.btm-panel{border-left:1px solid var(--border);}
 
-  .stat-card {
-    background: var(--bg2);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 1rem 1.25rem;
-  }
+.log-list{max-height:220px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:var(--border) transparent;}
+.log-line{display:flex;gap:10px;padding:4px 0;border-bottom:1px solid rgba(26,0,5,0.5);font-size:0.7rem;}
+.lt{color:var(--gold);flex-shrink:0;font-size:0.65rem;}
+.lm{color:var(--muted);}
+.lm.tp{color:var(--green);}
+.lm.err{color:var(--red);}
+.lm.ai{color:#aa44ff;}
+.lm.hi{color:var(--text);}
 
-  .stat-label {
-    font-size: 0.65rem;
-    letter-spacing: 0.1em;
-    color: var(--muted);
-    text-transform: uppercase;
-    margin-bottom: 4px;
-  }
+.port-item{font-size:0.72rem;line-height:2.2;display:flex;align-items:center;gap:8px;}
+.port-item .sym{font-family:'Orbitron',sans-serif;font-size:0.7rem;font-weight:700;min-width:80px;}
+.port-item .strat{color:var(--muted);font-size:0.65rem;}
 
-  .stat-value {
-    font-size: 1.4rem;
-    font-weight: 700;
-    color: var(--text);
-  }
-
-  .stat-value.gold { color: var(--gold); }
-  .stat-value.green { color: var(--green); }
-  .stat-value.red { color: var(--red); }
-
-  .stat-sub {
-    font-size: 0.7rem;
-    color: var(--muted);
-    margin-top: 2px;
-  }
-
-  /* INSTRUMENTS GRID */
-  .section-title {
-    font-size: 0.7rem;
-    letter-spacing: 0.15em;
-    color: var(--muted);
-    text-transform: uppercase;
-    margin-bottom: 0.75rem;
-    padding-bottom: 0.5rem;
-    border-bottom: 1px solid var(--border);
-  }
-
-  .instruments-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-    gap: 1rem;
-    margin-bottom: 1.5rem;
-  }
-
-  .instrument-card {
-    background: var(--bg2);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 1rem;
-    position: relative;
-    overflow: hidden;
-  }
-
-  .instrument-card::before {
-    content: '';
-    position: absolute;
-    top: 0; left: 0; right: 0;
-    height: 2px;
-  }
-
-  .instrument-card.gold-card::before { background: var(--gold); }
-  .instrument-card.forex-card::before { background: var(--blue); }
-  .instrument-card.active::before { box-shadow: 0 0 8px currentColor; }
-
-  .inst-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    margin-bottom: 0.75rem;
-  }
-
-  .inst-name {
-    font-size: 0.9rem;
-    font-weight: 700;
-    letter-spacing: 0.05em;
-  }
-
-  .inst-strategy {
-    font-size: 0.6rem;
-    letter-spacing: 0.1em;
-    color: var(--muted);
-    text-transform: uppercase;
-    margin-top: 2px;
-  }
-
-  .inst-badge {
-    font-size: 0.6rem;
-    padding: 2px 8px;
-    border-radius: 4px;
-    font-weight: 600;
-    letter-spacing: 0.05em;
-  }
-
-  .badge-bull { background: rgba(6,214,160,0.15); color: var(--green); }
-  .badge-bear { background: rgba(239,71,111,0.15); color: var(--red); }
-  .badge-neutral { background: rgba(107,107,138,0.15); color: var(--muted); }
-  .badge-ranging { background: rgba(17,138,178,0.15); color: var(--blue); }
-
-  .inst-price {
-    font-size: 1.3rem;
-    font-weight: 700;
-    margin-bottom: 0.5rem;
-  }
-
-  .inst-price.gold-price { color: var(--gold); }
-  .inst-price.forex-price { color: var(--text); }
-
-  .inst-stats {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 0.4rem;
-    margin-top: 0.75rem;
-    padding-top: 0.75rem;
-    border-top: 1px solid var(--border);
-  }
-
-  .inst-stat { font-size: 0.7rem; }
-  .inst-stat-label { color: var(--muted); display: block; }
-  .inst-stat-value { color: var(--text); font-weight: 600; }
-
-  /* POSITIONS TABLE */
-  .positions-section { margin-bottom: 1.5rem; }
-
-  .positions-table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 0.75rem;
-  }
-
-  .positions-table th {
-    text-align: left;
-    padding: 0.5rem 0.75rem;
-    font-size: 0.65rem;
-    letter-spacing: 0.1em;
-    color: var(--muted);
-    text-transform: uppercase;
-    border-bottom: 1px solid var(--border);
-  }
-
-  .positions-table td {
-    padding: 0.6rem 0.75rem;
-    border-bottom: 1px solid rgba(30,30,46,0.5);
-  }
-
-  .positions-table tr:hover td { background: var(--bg3); }
-
-  .pnl-pos { color: var(--green); }
-  .pnl-neg { color: var(--red); }
-
-  /* BOTTOM ROW */
-  .bottom-row {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 1rem;
-  }
-
-  @media (max-width: 700px) {
-    .bottom-row { grid-template-columns: 1fr; }
-  }
-
-  .panel {
-    background: var(--bg2);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 1rem;
-  }
-
-  /* LOG */
-  .log-list {
-    list-style: none;
-    max-height: 200px;
-    overflow-y: auto;
-    scrollbar-width: thin;
-  }
-
-  .log-list li {
-    font-size: 0.7rem;
-    padding: 3px 0;
-    border-bottom: 1px solid rgba(30,30,46,0.3);
-    color: var(--muted);
-  }
-
-  .log-list li .log-time { color: var(--gold); margin-right: 6px; }
-  .log-list li.log-tp { color: var(--green); }
-  .log-list li.log-err { color: var(--red); }
-  .log-list li.log-info { color: var(--text); }
-
-  /* CLAUDE */
-  .claude-box {
-    background: rgba(240,180,41,0.05);
-    border: 1px solid rgba(240,180,41,0.2);
-    border-radius: 6px;
-    padding: 0.75rem;
-    margin-top: 0.75rem;
-    font-size: 0.75rem;
-  }
-
-  .claude-bias {
-    font-size: 1rem;
-    font-weight: 700;
-    color: var(--gold);
-    margin-bottom: 4px;
-  }
-
-  .claude-reason { color: var(--muted); font-size: 0.7rem; }
-
-  /* REFRESH */
-  .refresh-btn {
-    background: none;
-    border: 1px solid var(--border);
-    color: var(--muted);
-    padding: 4px 10px;
-    border-radius: 4px;
-    font-size: 0.7rem;
-    cursor: pointer;
-    font-family: inherit;
-    transition: all 0.2s;
-  }
-
-  .refresh-btn:hover { border-color: var(--gold); color: var(--gold); }
-
-  .last-update { font-size: 0.65rem; color: var(--muted); margin-top: 4px; }
-
-  .no-data { color: var(--muted); font-size: 0.75rem; font-style: italic; }
+.footer-bar{
+  border-top:1px solid var(--border);padding:0.5rem 1.5rem;
+  display:flex;justify-content:space-between;align-items:center;
+  font-size:0.6rem;color:var(--muted);letter-spacing:0.1em;
+  background:rgba(255,0,34,0.02);
+}
+.no-data{color:var(--muted);font-size:0.75rem;padding:1.5rem;text-align:center;font-style:italic;}
 </style>
 </head>
 <body>
+<div class="wrap">
 
 <header>
-  <div class="logo">NEMSIS <span>v4</span></div>
+  <div class="logo-wrap">
+    <span class="biohazard">☣</span>
+    <div class="logo-text">
+      <div class="logo-main">NEMSIS</div>
+      <div class="logo-sub">MULTI-STRATEGY AUTONOMOUS TRADING SYSTEM · v4.0</div>
+    </div>
+  </div>
   <div class="header-right">
-    <span><span class="status-dot" id="statusDot"></span><span id="statusText">ühendub...</span></span>
-    <button class="refresh-btn" onclick="loadAll()">↻ uuenda</button>
+    <div class="threat-status">⚠ THREAT DETECTION ACTIVE ⚠</div>
+    <div class="live-dot"><span class="dot"></span><span id="statusTxt">CONNECTING...</span></div>
+    <button class="scan-btn" onclick="loadAll()">↻ RESCAN</button>
   </div>
 </header>
 
-<div class="container">
-
-  <!-- BALANCE ROW -->
-  <div class="balance-row">
-    <div class="stat-card">
-      <div class="stat-label">Balance</div>
-      <div class="stat-value gold" id="balance">—</div>
-      <div class="stat-sub" id="lastScan">—</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-label">Gold positsioonid</div>
-      <div class="stat-value" id="goldPos">—</div>
-      <div class="stat-sub">grid tehingud</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-label">Forex positsioonid</div>
-      <div class="stat-value" id="forexPos">—</div>
-      <div class="stat-sub">mean reversion</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-label">Claude AI</div>
-      <div class="stat-value green" id="claudeBias">—</div>
-      <div class="stat-sub" id="claudeReason">—</div>
-    </div>
+<div class="stats-row">
+  <div class="stat gold">
+    <div class="stat-label">Account Balance</div>
+    <div class="stat-val gold" id="balance">—</div>
+    <div class="stat-sub" id="lastScan">—</div>
   </div>
-
-  <!-- INSTRUMENTS -->
-  <div class="section-title">Instrumendid</div>
-  <div class="instruments-grid" id="instrumentsGrid">
-    <div class="no-data">Laen andmeid...</div>
+  <div class="stat green">
+    <div class="stat-label">Gold Positions</div>
+    <div class="stat-val green" id="goldPos">—</div>
+    <div class="stat-sub">XAUUSD trend grid</div>
   </div>
-
-  <!-- POSITIONS -->
-  <div class="positions-section">
-    <div class="section-title">Avatud positsioonid</div>
-    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:8px;overflow:hidden;">
-      <table class="positions-table">
-        <thead>
-          <tr>
-            <th>Instrument</th>
-            <th>Suund</th>
-            <th>Entry</th>
-            <th>TP</th>
-            <th>Lot</th>
-            <th>Strateegia</th>
-            <th>Aeg</th>
-          </tr>
-        </thead>
-        <tbody id="positionsBody">
-          <tr><td colspan="7" class="no-data" style="padding:1rem;">Laen...</td></tr>
-        </tbody>
-      </table>
-    </div>
+  <div class="stat blue">
+    <div class="stat-label">Forex Positions</div>
+    <div class="stat-val blue" id="forexPos">—</div>
+    <div class="stat-sub">mean reversion · 8 pairs</div>
   </div>
-
-  <!-- BOTTOM ROW -->
-  <div class="bottom-row">
-    <div class="panel">
-      <div class="section-title">Bot Log</div>
-      <ul class="log-list" id="logList">
-        <li>Laen...</li>
-      </ul>
-    </div>
-    <div class="panel">
-      <div class="section-title">Claude AI Analüüs</div>
-      <div class="claude-box">
-        <div class="claude-bias" id="claudeBias2">—</div>
-        <div class="claude-reason" id="claudeReason2">Ootan analüüsi...</div>
-      </div>
-      <div class="section-title" style="margin-top:1rem;">Strateegiad</div>
-      <div style="font-size:0.72rem;line-height:1.8;color:var(--muted);">
-        🥇 XAUUSD — Trend Grid ($30 sammud)<br>
-        💱 AUDCAD — Mean Reversion (Aasia)<br>
-        💱 AUDNZD — Mean Reversion (ADX filter)<br>
-        💱 EURGBP — Mean Reversion (ADX filter)<br>
-        💱 EURCHF — Mean Reversion (Aasia)<br>
-        💱 NZDCAD — Mean Reversion (Aasia)
-      </div>
-    </div>
+  <div class="stat gold">
+    <div class="stat-label">Gold Target</div>
+    <div class="stat-val gold" id="goldPrice">—</div>
+    <div class="stat-sub" id="goldTrend">—</div>
   </div>
-
-  <div class="last-update">Viimane uuendus: <span id="lastUpdate">—</span></div>
-
+  <div class="stat red">
+    <div class="stat-label">Active Pairs</div>
+    <div class="stat-val red">9</div>
+    <div class="stat-sub">1 gold + 8 forex</div>
+  </div>
 </div>
 
+<div class="claude-box">
+  <div class="ai-icon">◈</div>
+  <div>
+    <div class="ai-bias" id="claudeBias">CLAUDE AI — ANALYZING MARKET...</div>
+    <div class="ai-reason" id="claudeReason">Initializing market intelligence...</div>
+  </div>
+</div>
+
+<div class="sec-div"><span class="sec-title">Instrument Status</span><span class="sec-line"></span></div>
+<div class="inst-grid" id="instGrid"><div class="no-data">Loading instruments...</div></div>
+
+<div class="sec-div"><span class="sec-title">Open Positions</span><span class="sec-line"></span></div>
+<div class="tbl-wrap">
+  <table>
+    <thead><tr><th>Symbol</th><th>Direction</th><th>Entry</th><th>Target</th><th>Lot</th><th>Strategy</th><th>TF</th><th>Time</th></tr></thead>
+    <tbody id="posBody"><tr><td colspan="8" class="no-data">No open positions</td></tr></tbody>
+  </table>
+</div>
+
+<div class="sec-div"><span class="sec-title">System</span><span class="sec-line"></span></div>
+<div class="btm">
+  <div class="btm-panel">
+    <div class="sec-div" style="border:none;padding:0 0 0.75rem;margin-bottom:0.75rem;border-bottom:1px solid var(--border);"><span class="sec-title" style="font-size:0.6rem;">System Log</span></div>
+    <div class="log-list" id="logList"><div class="no-data">Loading log...</div></div>
+  </div>
+  <div class="btm-panel">
+    <div class="sec-div" style="border:none;padding:0 0 0.75rem;margin-bottom:0.75rem;border-bottom:1px solid var(--border);"><span class="sec-title" style="font-size:0.6rem;">Portfolio</span></div>
+    <div id="portList">
+      <div class="port-item"><span class="sym" style="color:var(--gold)">XAUUSD</span><span class="strat">Trend Grid · 1h · Claude AI</span></div>
+      <div class="port-item"><span class="sym" style="color:var(--blue)">AUDCAD</span><span class="strat">Mean Rev · 15min · Asia session</span></div>
+      <div class="port-item"><span class="sym" style="color:var(--blue)">EURAUD</span><span class="strat">Mean Rev · 15min · Asia session</span></div>
+      <div class="port-item"><span class="sym" style="color:var(--blue)">AUDNZD</span><span class="strat">Mean Rev · 15min · ADX filter</span></div>
+      <div class="port-item"><span class="sym" style="color:var(--blue)">GBPCAD</span><span class="strat">Mean Rev · 15min · ADX filter</span></div>
+      <div class="port-item"><span class="sym" style="color:var(--blue)">EURGBP</span><span class="strat">Mean Rev · 15min · ADX filter</span></div>
+      <div class="port-item"><span class="sym" style="color:var(--blue)">CADCHF</span><span class="strat">Mean Rev · 15min · ADX filter</span></div>
+      <div class="port-item"><span class="sym" style="color:var(--blue)">EURCHF</span><span class="strat">Mean Rev · 15min · ADX filter</span></div>
+      <div class="port-item"><span class="sym" style="color:var(--blue)">NZDCAD</span><span class="strat">Mean Rev · 1h · Asia session</span></div>
+    </div>
+  </div>
+</div>
+
+<div class="footer-bar">
+  <span>☣ NEMSIS v4 · AUTONOMOUS TRADING SYSTEM</span>
+  <span id="footerTime">—</span>
+</div>
+
+</div>
 <script>
-const SUPABASE_URL = 'https://xqinzjaqorjqaexeoyqc.supabase.co'
-const SUPABASE_KEY = 'sb_publishable_eGAHjERYuK9ztviFer41CQ_6FouGpQU'
-
-const INSTRUMENTS = {
-  'XAUUSD': { type: 'gold', name: 'GOLD', strategy: 'Trend Grid' },
-  'AUDCAD': { type: 'forex', name: 'AUD/CAD', strategy: 'Mean Reversion' },
-  'AUDNZD': { type: 'forex', name: 'AUD/NZD', strategy: 'Mean Reversion' },
-  'EURGBP': { type: 'forex', name: 'EUR/GBP', strategy: 'Mean Reversion' },
-  'EURCHF': { type: 'forex', name: 'EUR/CHF', strategy: 'Mean Reversion' },
-  'NZDCAD': { type: 'forex', name: 'NZD/CAD', strategy: 'Mean Reversion' },
+const SB='https://xqinzjaqorjqaexeoyqc.supabase.co'
+const KEY='sb_publishable_eGAHjERYuK9ztviFer41CQ_6FouGpQU'
+const INST={
+  XAUUSD:{n:'XAU/USD',t:'gold',  tf:'1h',   s:'Trend Grid'},
+  AUDCAD:{n:'AUD/CAD',t:'forex', tf:'15min', s:'Mean Rev'},
+  EURAUD:{n:'EUR/AUD',t:'forex', tf:'15min', s:'Mean Rev'},
+  AUDNZD:{n:'AUD/NZD',t:'forex', tf:'15min', s:'Mean Rev'},
+  GBPCAD:{n:'GBP/CAD',t:'forex', tf:'15min', s:'Mean Rev'},
+  EURGBP:{n:'EUR/GBP',t:'forex', tf:'15min', s:'Mean Rev'},
+  CADCHF:{n:'CAD/CHF',t:'forex', tf:'15min', s:'Mean Rev'},
+  EURCHF:{n:'EUR/CHF',t:'forex', tf:'15min', s:'Mean Rev'},
+  NZDCAD:{n:'NZD/CAD',t:'forex', tf:'1h',   s:'Mean Rev'},
 }
-
-async function sbFetch(path) {
-  const r = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
-    headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` }
-  })
+async function sb(p){
+  const r=await fetch(`${SB}/rest/v1/${p}`,{headers:{'apikey':KEY,'Authorization':`Bearer ${KEY}`}})
+  if(!r.ok)throw new Error(r.status)
   return r.json()
 }
-
-async function loadAll() {
-  try {
-    // Bot state
-    const state = await sbFetch('bot_state?id=eq.1&select=*')
-    const s = state[0] || {}
-    const stats = s.stats || {}
-    const balance = stats.balance || s.balance || '—'
-    
-    document.getElementById('balance').textContent = 
-      typeof balance === 'number' ? balance.toFixed(2) + '€' : balance + '€'
-    document.getElementById('lastScan').textContent = s.last_scan || '—'
-    document.getElementById('goldPos').textContent = stats.gold_positions ?? '—'
-    document.getElementById('forexPos').textContent = stats.forex_positions ?? '—'
-
-    // Claude
-    const claudeBias = stats.claude_bias || '—'
-    document.getElementById('claudeBias').textContent = claudeBias.toUpperCase()
-    document.getElementById('claudeBias2').textContent = '🤖 ' + claudeBias.toUpperCase()
-    document.getElementById('claudeReason2').textContent = stats.claude_reason || 'Ootan analüüsi...'
-
-    // Log
-    const logs = s.log || []
-    const logEl = document.getElementById('logList')
-    if (logs.length) {
-      logEl.innerHTML = [...logs].reverse().map(l => {
-        let cls = ''
-        if (l.includes('✅')) cls = 'log-tp'
-        else if (l.includes('❌') || l.includes('ERROR')) cls = 'log-err'
-        else if (l.includes('💰') || l.includes('📊') || l.includes('🤖')) cls = 'log-info'
-        const parts = l.split('  ')
-        const time = parts[0] || ''
-        const msg  = parts.slice(1).join('  ')
-        return `<li class="${cls}"><span class="log-time">${time}</span>${msg}</li>`
-      }).join('')
-    }
-
-    // Status
-    document.getElementById('statusDot').style.background = 'var(--green)'
-    document.getElementById('statusText').textContent = 'aktiivne'
-
-    // Positions
-    const positions = await sbFetch('signals?executed=eq.false&order=created_at.desc&limit=20')
-    const tbody = document.getElementById('positionsBody')
-    const goldPos = positions.filter(p => p.regime === 'grid')
-    const forexPos = positions.filter(p => p.regime === 'meanrev')
-
-    document.getElementById('goldPos').textContent = goldPos.length
-    document.getElementById('forexPos').textContent = forexPos.length
-
-    if (positions.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="7" class="no-data" style="padding:1rem;text-align:center;">Avatud positsioone pole</td></tr>'
-    } else {
-      tbody.innerHTML = positions.map(p => {
-        const dir = p.direction === 'buy' ? '🟢 BUY' : '🔴 SELL'
-        const symbol = p.regime === 'grid' ? 'XAUUSD' : (p.session || '—')
-        const time = p.created_at ? new Date(p.created_at).toLocaleTimeString('et-EE') : '—'
-        const entry = parseFloat(p.entry || 0)
-        const tp    = parseFloat(p.tp || 0)
-        const fmt   = symbol === 'XAUUSD' ? v => v.toFixed(2) : v => v.toFixed(5)
-        return `<tr>
-          <td style="font-weight:600;">${symbol}</td>
-          <td>${dir}</td>
-          <td>${fmt(entry)}</td>
-          <td style="color:var(--green)">${fmt(tp)}</td>
-          <td>${p.lot || '0.01'}</td>
-          <td style="color:var(--muted);font-size:0.65rem;">${p.regime === 'grid' ? 'Trend Grid' : 'Mean Rev'}</td>
-          <td style="color:var(--muted)">${time}</td>
-        </tr>`
-      }).join('')
-    }
-
-    // Instruments grid
-    const grid = document.getElementById('instrumentsGrid')
-    grid.innerHTML = Object.entries(INSTRUMENTS).map(([sym, info]) => {
-      const isGold = info.type === 'gold'
-      const symPositions = isGold 
-        ? positions.filter(p => p.regime === 'grid')
-        : positions.filter(p => p.session === sym)
-      
-      const price = isGold ? (s.price ? '$' + parseFloat(s.price).toFixed(2) : '—') : '—'
-      const trend = isGold ? (stats.trend || 'neutral') : 'ranging'
-      
-      const badgeClass = trend === 'bull' ? 'badge-bull' : 
-                         trend === 'bear' ? 'badge-bear' :
-                         trend === 'ranging' ? 'badge-ranging' : 'badge-neutral'
-
-      return `<div class="instrument-card ${isGold ? 'gold-card' : 'forex-card'}">
-        <div class="inst-header">
-          <div>
-            <div class="inst-name">${info.name}</div>
-            <div class="inst-strategy">${info.strategy}</div>
-          </div>
-          <div class="inst-badge ${badgeClass}">${trend.toUpperCase()}</div>
+async function loadAll(){
+  try{
+    const[sa,pos]=await Promise.all([sb('bot_state?id=eq.1&select=*'),sb('signals?executed=eq.false&order=created_at.desc&limit=30')])
+    const s=sa[0]||{};const st=s.stats||{};const logs=s.log||[]
+    const bal=st.balance||s.balance||0
+    document.getElementById('balance').textContent=typeof bal==='number'?bal.toFixed(2)+'€':'—'
+    document.getElementById('lastScan').textContent=s.last_scan||'—'
+    document.getElementById('goldPrice').textContent=st.price?'$'+parseFloat(st.price).toFixed(2):'—'
+    document.getElementById('goldTrend').textContent=st.trend?'TREND: '+st.trend.toUpperCase():'—'
+    const gp=Array.isArray(pos)?pos.filter(p=>p.regime==='grid'):[]
+    const fp=Array.isArray(pos)?pos.filter(p=>p.regime==='meanrev'):[]
+    document.getElementById('goldPos').textContent=gp.length
+    document.getElementById('forexPos').textContent=fp.length
+    const bias=st.claude_bias||'NEUTRAL'
+    document.getElementById('claudeBias').textContent='◈ CLAUDE AI · '+bias.toUpperCase()+' BIAS DETECTED'
+    document.getElementById('claudeReason').textContent=st.claude_reason||'Market analysis pending...'
+    document.getElementById('statusTxt').textContent='SYSTEM ACTIVE'
+    const ig=document.getElementById('instGrid')
+    ig.innerHTML=Object.entries(INST).map(([sym,info])=>{
+      const isG=info.t==='gold'
+      const sp=isG?gp.length:(Array.isArray(pos)?pos.filter(p=>p.session===sym).length:0)
+      const price=isG&&st.price?'$'+parseFloat(st.price).toFixed(2):'—'
+      const trend=isG?(st.trend||'neutral'):'ranging'
+      const bc=trend==='bull'?'bb':trend==='bear'?'br':trend==='ranging'?'bra':'bn'
+      return`<div class="inst inst-${info.t}">
+        <div class="inst-top">
+          <div><div class="inst-name">${info.n}</div><div class="inst-tf">${info.s} · ${info.tf}</div></div>
+          <div class="badge ${bc}">${trend.toUpperCase()}</div>
         </div>
-        <div class="inst-price ${isGold ? 'gold-price' : 'forex-price'}">${price}</div>
-        <div class="inst-stats">
-          <div class="inst-stat">
-            <span class="inst-stat-label">Positsioonid</span>
-            <span class="inst-stat-value">${symPositions.length}</span>
-          </div>
-          <div class="inst-stat">
-            <span class="inst-stat-label">Staatus</span>
-            <span class="inst-stat-value" style="color:var(--green)">AKTIIVNE</span>
-          </div>
-        </div>
+        <div class="inst-price ${isG?'gp':'fp'}">${price}</div>
+        <div class="inst-bot"><span>POSITIONS</span><b>${sp}</b></div>
       </div>`
     }).join('')
-
-    document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString('et-EE')
-
-  } catch(e) {
+    const pb=document.getElementById('posBody')
+    if(!Array.isArray(pos)||pos.length===0){pb.innerHTML='<tr><td colspan="8" class="no-data">NO ACTIVE TARGETS</td></tr>'}
+    else{pb.innerHTML=pos.map(p=>{
+      const sym=p.regime==='grid'?'XAUUSD':(p.session||'—')
+      const info=INST[sym]||{tf:'—',s:'—'}
+      const isG=p.regime==='grid'
+      const fmt=v=>isG?parseFloat(v||0).toFixed(2):parseFloat(v||0).toFixed(5)
+      const t=p.created_at?new Date(p.created_at).toLocaleTimeString('et-EE'):'—'
+      const dc=p.direction==='buy'?'buy':'sell'
+      const da=p.direction==='buy'?'▲ BUY':'▼ SELL'
+      return`<tr><td style="font-family:'Orbitron',sans-serif;font-size:0.7rem;font-weight:700">${sym}</td>
+      <td class="${dc}">${da}</td><td>${fmt(p.entry)}</td>
+      <td class="tp-val">${fmt(p.tp)}</td><td>${p.lot||'0.01'}</td>
+      <td style="color:var(--muted);font-size:0.65rem">${info.s}</td>
+      <td style="color:var(--blue);font-size:0.65rem">${info.tf}</td>
+      <td style="color:var(--muted)">${t}</td></tr>`
+    }).join('')}
+    const ll=document.getElementById('logList')
+    if(logs.length){ll.innerHTML=[...logs].reverse().map(l=>{
+      let cls=''
+      if(l.includes('✅'))cls='tp'
+      else if(l.includes('❌')||l.includes('ERROR'))cls='err'
+      else if(l.includes('🤖')||l.includes('Claude'))cls='ai'
+      else if(l.includes('💰')||l.includes('💱')||l.includes('🥇'))cls='hi'
+      const pts=l.split('  ');const t=pts[0]||'';const m=pts.slice(1).join('  ')
+      return`<div class="log-line"><span class="lt">${t}</span><span class="lm ${cls}">${m}</span></div>`
+    }).join('')}
+    document.getElementById('footerTime').textContent='LAST SCAN: '+new Date().toLocaleTimeString('et-EE')
+  }catch(e){
+    document.getElementById('statusTxt').textContent='CONNECTION ERROR'
     console.error(e)
-    document.getElementById('statusDot').style.background = 'var(--red)'
-    document.getElementById('statusText').textContent = 'ühenduse viga'
   }
 }
-
 loadAll()
-setInterval(loadAll, 30000)
+setInterval(loadAll,30000)
 </script>
 </body>
 </html>
