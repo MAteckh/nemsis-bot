@@ -111,6 +111,30 @@ INSTRUMENTS = {
         "rsi_os":     40,
         "enabled":      True,
     },
+    "EURNZD": {
+        "strategy":     "meanrev",
+        "lot":          0.01,
+        "session":      "all",
+        "adx_filter":   True,
+        "pip_value":    100000,
+        "symbol_td":    "EUR/NZD",
+        "interval":     "15min",
+        "rsi_ob":       60,
+        "rsi_os":       40,
+        "enabled":      True,
+    },
+    "GBPNZD": {
+        "strategy":     "meanrev",
+        "lot":          0.01,
+        "session":      "all",
+        "adx_filter":   True,
+        "pip_value":    100000,
+        "symbol_td":    "GBP/NZD",
+        "interval":     "15min",
+        "rsi_ob":       60,
+        "rsi_os":       40,
+        "enabled":      True,
+    },
 }
 
 # Mean reversion parameetrid
@@ -133,6 +157,8 @@ MEANREV_CONFIG = {
         "CADCHF": (60, 40),
         "EURCHF": (72, 28),
         "NZDCAD": (60, 40),
+        "EURNZD": (60, 40),
+        "GBPNZD": (60, 40),
     }
 }
 
