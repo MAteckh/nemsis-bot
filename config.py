@@ -58,6 +58,33 @@ INSTRUMENTS = {
         "symbol_td":  "NZD/CAD",
         "enabled":    True,
     },
+    "EURAUD": {
+        "strategy":   "meanrev",
+        "lot":        0.01,
+        "session":    "asia",
+        "adx_filter": False,
+        "pip_value":  100000,
+        "symbol_td":  "EUR/AUD",
+        "enabled":    True,
+    },
+    "GBPCAD": {
+        "strategy":   "meanrev",
+        "lot":        0.01,
+        "session":    "all",
+        "adx_filter": True,
+        "pip_value":  100000,
+        "symbol_td":  "GBP/CAD",
+        "enabled":    True,
+    },
+    "CADCHF": {
+        "strategy":   "meanrev",
+        "lot":        0.01,
+        "session":    "all",
+        "adx_filter": True,
+        "pip_value":  100000,
+        "symbol_td":  "CAD/CHF",
+        "enabled":    True,
+    },
 }
 
 # Mean reversion parameetrid (kõigile forex paaridele)
