@@ -396,7 +396,9 @@ def main():
             for symbol, strategy in mr_strategies.items():
                 try:
                     cfg = INSTRUMENTS[symbol]
-                    df  = get_data(cfg["symbol_td"])
+                    interval = cfg.get("interval", "1h")
+                    outputsize = 200 if interval == "15min" else 100
+                    df  = get_data(cfg["symbol_td"], interval=interval, outputsize=outputsize)
                     price = get_price(cfg["symbol_td"])
                     if price == 0 and df is not None:
                         price = float(df["close"].iloc[-1])
