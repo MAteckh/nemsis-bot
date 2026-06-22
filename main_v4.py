@@ -15,13 +15,13 @@ from config import INSTRUMENTS, MEANREV_CONFIG, GRID_CONFIG
 from strategy_meanrev import MeanRevStrategy
 
 # ── Env vars ─────────────────────────────────────────────
-SUPABASE_URL     = os.environ.get("SUPABASE_URL", "https://xqinzjaqorjqaexeoyqc.supabase.co")
-SUPABASE_KEY     = os.environ.get("SUPABASE_KEY", "sb_secret_geYNl5euHLVWXQtone_N0g_K5nB0Zel")
-TELEGRAM_TOKEN   = os.environ.get("TELEGRAM_TOKEN", "7502951774:AAFEdMlowZumpFlLm817UEP4ws40SeZtROo")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "7638697143")
+SUPABASE_URL     = os.environ.get("SUPABASE_URL", "")
+SUPABASE_KEY     = os.environ.get("SUPABASE_KEY", "")
+TELEGRAM_TOKEN   = os.environ.get("TELEGRAM_TOKEN", "")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 SCAN_INTERVAL    = int(os.environ.get("SCAN_INTERVAL", "60"))
-ACCOUNT_BALANCE  = float(os.environ.get("ACCOUNT_BALANCE", "500"))
-TWELVEDATA_KEY   = os.environ.get("TWELVEDATA_KEY", "74935ad641d14749a66009b4abc84ce7")
+ACCOUNT_BALANCE  = float(os.environ.get("ACCOUNT_BALANCE", "200"))
+TWELVEDATA_KEY   = os.environ.get("TWELVEDATA_KEY", "")
 ANTHROPIC_KEY    = os.environ.get("ANTHROPIC_KEY", "")
 
 logging.basicConfig(
