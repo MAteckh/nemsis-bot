@@ -13,6 +13,7 @@ import numpy as np
 
 from config import INSTRUMENTS, MEANREV_CONFIG, GRID_CONFIG
 from strategy_meanrev import MeanRevStrategy
+import ctrader as ct
 
 # ── Env vars ─────────────────────────────────────────────
 SUPABASE_URL     = os.environ.get("SUPABASE_URL", "")
@@ -152,6 +153,14 @@ def get_scalp_data():
         return _scalp_cache["df"]
 
 def get_price(symbol_td):
+    """Hangi hind — cTrader esimesena, TwelveData fallback."""
+    try:
+        price = ct.get_price_ctrader(symbol_td)
+        if price > 0:
+            return price
+    except:
+        pass
+    # TwelveData fallback
     try:
         r = requests.get("https://api.twelvedata.com/price",
             params={"symbol": symbol_td, "apikey": TWELVEDATA_KEY}, timeout=10)
@@ -439,6 +448,19 @@ def main():
 
     balance = get_balance()
     add_log(f"💼 Balance: {balance:.2f}€")
+
+    # cTrader ühenduse kontroll
+    if ct.CLIENT_ID and ct.CLIENT_SECRET:
+        if ct.is_connected():
+            add_log("🔗 cTrader: ÜHENDATUD")
+            ct_balance = ct.get_account_balance()
+            if ct_balance:
+                add_log(f"💳 cTrader balance: {ct_balance:.2f}€")
+        else:
+            add_log("⚠️ cTrader: token puudub — kasutan TwelveData andmeid")
+            add_log(ct.setup_oauth())
+    else:
+        add_log("ℹ️ cTrader: credentials puuduvad — kasutan TwelveData")
 
     send_telegram(
         f"🚀 <b>NEMSIS v4 käivitus!</b>\n"
