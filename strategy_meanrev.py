@@ -78,6 +78,40 @@ class MeanRevStrategy:
         self.update_data(high, low, price)
         if len(self.closes) < 25: return
 
+        # ── SPREAD FILTER ──────────────────────────────────
+        # Kõrge spread = ära kauple (öösel, uudiste ajal)
+        spread = high - low
+        avg_spread = float(np.mean([abs(self.highs[i]-self.lows[i]) for i in range(-20,0)])) if len(self.highs) >= 20 else spread
+        if avg_spread > 0 and spread > avg_spread * 2.5:
+            return  # spread liiga kõrge
+
+        # ── WEEKEND SULGEMINE ──────────────────────────────
+        # Reede 21:00 UTC — sulge kõik positsioonid
+        if now.weekday() == 4 and now.hour >= 21:
+            open_pos = self.get_open_positions()
+            if open_pos:
+                balance = self.get_balance()
+                for pos in open_pos:
+                    fl = (price - float(pos["entry"])) * self.cfg["lot"] * self.cfg["pip_value"]                          if pos["direction"] == "buy"                          else (float(pos["entry"]) - price) * self.cfg["lot"] * self.cfg["pip_value"]
+                    new_bal = round(balance + fl, 2)
+                    self.sb_upsert("signals", {"id": pos["id"], "executed": True})
+                    self.sb_upsert("bot_state", {"id": 1, "balance": new_bal})
+                    balance = new_bal
+                self.add_log(f"🔒 {self.symbol} weekend sulgemine")
+            return
+
+        # ── ESMASPÄEV — ei kauple kell 00:00-01:00 (gap risk) ──
+        if now.weekday() == 0 and now.hour < 1:
+            return
+
+        # ── UUDISTE FILTER ─────────────────────────────────
+        # Ei kauple kolmapäev 18:00-19:00 UTC (Fed) ja
+        # esimene reede kuus 12:00-13:30 UTC (NFP)
+        if now.weekday() == 2 and 18 <= now.hour < 19:
+            return  # Fed rate decision
+        if now.weekday() == 4 and now.day <= 7 and 12 <= now.hour < 14:
+            return  # NFP (esimene reede kuus)
+
         balance = self.get_balance()
         if self.peak_balance is None:
             self.peak_balance = balance
@@ -146,6 +180,10 @@ class MeanRevStrategy:
         if lower is None: return
         rsi = calc_rsi(self.closes, self.mr_cfg["rsi_period"])
 
+        # RSI per paar — optimeeritud seadistused
+        rsi_per_pair = self.mr_cfg.get("rsi_per_pair", {})
+        rsi_ob, rsi_os = rsi_per_pair.get(self.symbol, (self.mr_cfg["rsi_ob"], self.mr_cfg["rsi_os"]))
+
         open_pos = self.get_open_positions()
         if len(open_pos) >= self.mr_cfg["max_pos"]: return
 
@@ -153,7 +191,7 @@ class MeanRevStrategy:
         lot     = self.cfg["lot"]
 
         # SELL — hind üle ülemise bändi + overbought
-        if high >= upper and rsi > self.mr_cfg["rsi_ob"]:
+        if high >= upper and rsi > rsi_ob:
             exists = any(p["direction"]=="sell" and abs(float(p["entry"])-price) < atr_val for p in open_pos)
             if not exists:
                 tp = round(price - atr_val, 5)
@@ -167,7 +205,7 @@ class MeanRevStrategy:
                 self.add_log(f"📊 {self.symbol} SELL @ {price:.5f} | RSI:{rsi:.0f} | BB upper")
 
         # BUY — hind alla alumise bändi + oversold
-        if low <= lower and rsi < self.mr_cfg["rsi_os"]:
+        if low <= lower and rsi < rsi_os:
             exists = any(p["direction"]=="buy" and abs(float(p["entry"])-price) < atr_val for p in open_pos)
             if not exists:
                 tp = round(price + atr_val, 5)
