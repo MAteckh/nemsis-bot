@@ -173,6 +173,10 @@ def get_compound_lot(balance):
     base = round(max(0.01, (balance/ACCOUNT_BALANCE)*0.01), 3)
     return round(base * get_vol_mult(), 3)
 
+def get_scaled_max_float(balance):
+    """Max floating loss skaleerub koos kontoga."""
+    return GRID_CONFIG["max_float"] * (balance / ACCOUNT_BALANCE)
+
 def get_grid_state():
     rows = sb_select("bot_state", "id=eq.1&select=risk")
     if rows and rows[0].get("risk") and "grid" in rows[0]["risk"]:
@@ -298,7 +302,7 @@ def run_gold_grid(price, high, low, now):
             continue
 
         fl = (price-entry)*lot*100 if d=="buy" else (entry-price)*lot*100
-        if fl < -mfl*(balance/ACCOUNT_BALANCE):
+        if fl < -get_scaled_max_float(balance):
             balance = round(balance+fl, 2)
             sb_upsert("signals", {"id":pid,"executed":True})
             sb_upsert("bot_state", {"id":1,"balance":balance})
@@ -330,6 +334,35 @@ def run_gold_grid(price, high, low, now):
     if triggered:
         grid_state["pending"] = pending
         save_grid_state(grid_state)
+
+# ─────────────────────────────────────────────────────────
+#  STATISTIKA
+# ─────────────────────────────────────────────────────────
+
+def get_stats():
+    """Konto statistika — wins, kaotused, net P&L."""
+    try:
+        trades = sb_select("signals", "executed=eq.true&order=created_at.desc&limit=100")
+        if not trades: return {"total": 0, "wins": 0, "net_pnl": 0.0, "win_rate": 0}
+        wins = [t for t in trades if float(t.get("tp") or 0) > 0]
+        return {
+            "total":    len(trades),
+            "wins":     len(wins),
+            "net_pnl":  round(get_balance() - ACCOUNT_BALANCE, 2),
+            "win_rate": round(len(wins)/len(trades)*100, 1) if trades else 0,
+        }
+    except Exception as e:
+        logger.error(f"get_stats: {e}")
+        return {"total": 0, "wins": 0, "net_pnl": 0.0, "win_rate": 0}
+
+def sb_delete(table, params):
+    """Kustutab ridu Supabase tabelist."""
+    try:
+        r = requests.delete(f"{SUPABASE_URL}/rest/v1/{table}?{params}", headers=sb_headers(), timeout=10)
+        return r.status_code in (200, 204)
+    except Exception as e:
+        logger.error(f"SB delete: {e}")
+        return False
 
 # ─────────────────────────────────────────────────────────
 #  MAIN LOOP
@@ -435,12 +468,18 @@ def main():
 
             # Päevane kokkuvõte 8:00 UTC
             if now.hour == 8 and now.minute == 0:
+                stats = get_stats()
+                trend = _claude_cache.get("bias", "neutral")
                 send_telegram(
                     f"🌅 <b>NEMSIS v4 Päevane kokkuvõte</b>\n"
                     f"━━━━━━━━━━━━━━━━━━━━━\n"
                     f"💼 Balance: <b>{balance:.2f}€</b>\n"
-                    f"🥇 Gold positsioonid: <b>{len(gold_pos)}</b>\n"
-                    f"💱 Forex positsioonid: <b>{len(forex_pos)}</b>\n"
+                    f"📈 Net P&L: <b>{stats['net_pnl']:+.2f}€</b>\n"
+                    f"🎯 Win rate: <b>{stats['win_rate']}%</b> ({stats['wins']}/{stats['total']})\n"
+                    f"🥇 Gold pos: <b>{len(gold_pos)}</b>\n"
+                    f"💱 Forex pos: <b>{len(forex_pos)}</b>\n"
+                    f"🤖 Claude: <b>{trend.upper()}</b>\n"
+                    f"💰 Gold: <b>${price_gold:.2f}</b>\n"
                     f"⏰ {now.strftime('%d.%m.%Y')} UTC"
                 )
 
