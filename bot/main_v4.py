@@ -378,6 +378,7 @@ def main():
             add_log(f"⏱ Scan #{scan_count} — {now.strftime('%H:%M')} UTC")
 
             # ── GOLD GRID ──
+            price_gold = 0
             if INSTRUMENTS["XAUUSD"]["enabled"]:
                 try:
                     df_gold = get_data("XAU/USD")
@@ -419,11 +420,16 @@ def main():
             sb_upsert("bot_state", {
                 "id": 1, "updated_at": now.isoformat(),
                 "last_scan": now.strftime("%H:%M:%S UTC"),
+                "log": log_buffer[-30:],
                 "stats": {
-                    "balance":       balance,
+                    "balance":         balance,
                     "gold_positions":  len(gold_pos),
                     "forex_positions": len(forex_pos),
-                    "scan":          scan_count,
+                    "scan":            scan_count,
+                    "claude_bias":     _claude_cache.get("bias", "neutral"),
+                    "claude_reason":   _claude_cache.get("reason", ""),
+                    "price":           round(price_gold if price_gold > 0 else 0, 2),
+                    "instruments":     list(INSTRUMENTS.keys()),
                 }
             })
 
