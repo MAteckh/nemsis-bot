@@ -148,7 +148,10 @@ footer{
   </div>
   <div class="hdr-right">
     <div class="live"><span class="dot"></span><span id="st">CONNECTING</span></div>
-    <button class="btn" onclick="loadAll()">↻ SCAN</button>
+    <button class="scan-btn" onclick="loadAll()">↻ SCAN</button>
+    <button class="close-btn" onclick="confirmAction('close')">⊗ SULGE KÕIK</button>
+    <button class="stop-btn" id="stopBtn" onclick="confirmAction('stop')" style="display:none">⏹ STOPP</button>
+    <button class="start-btn" id="startBtn" onclick="confirmAction('start')" style="display:none">▶ START</button>
   </div>
 </header>
 
@@ -203,6 +206,16 @@ footer{
   <span>☣ NEMSIS v4 · MULTI-STRATEGY AUTONOMOUS TRADING</span>
   <span id="ft">—</span>
 </footer>
+
+<div class="overlay" id="overlay" onclick="cancelConfirm()"></div>
+<div class="confirm-box" id="confirmBox">
+  <div style="color:var(--red);font-family:'Orbitron',sans-serif;font-size:0.9rem;margin-bottom:1rem;" id="confirmTitle">KINNITA</div>
+  <div style="color:var(--muted);font-size:0.75rem;margin-bottom:1.5rem;" id="confirmText">Kas oled kindel?</div>
+  <div style="display:flex;gap:10px;justify-content:center;">
+    <button class="stop-btn" onclick="executeAction()">KINNITA</button>
+    <button class="scan-btn" onclick="cancelConfirm()">TÜHISTA</button>
+  </div>
+</div>
 </div>
 
 <script>
@@ -254,6 +267,76 @@ async function loadAll(){
   }catch(e){document.getElementById('st').textContent='ERROR';console.error(e)}
 }
 loadAll();setInterval(loadAll,30000)
+
+let pendingAction = null
+
+function confirmAction(action) {
+  pendingAction = action
+  const titles = {
+    'close': '⊗ SULGE KÕIK POSITSIOONID',
+    'stop':  '⏹ PEATA KAUPLEMNE',
+    'start': '▶ JÄTKA KAUPLEMINE'
+  }
+  const texts = {
+    'close': 'Kõik avatud positsioonid suletakse praeguse hinnaga!',
+    'stop':  'Bot lõpetab uute tehingute avamise.',
+    'start': 'Bot jätkab kauplemine.'
+  }
+  document.getElementById('confirmTitle').textContent = titles[action]
+  document.getElementById('confirmText').textContent = texts[action]
+  document.getElementById('confirmBox').classList.add('active')
+  document.getElementById('overlay').classList.add('active')
+}
+
+function cancelConfirm() {
+  pendingAction = null
+  document.getElementById('confirmBox').classList.remove('active')
+  document.getElementById('overlay').classList.remove('active')
+}
+
+async function executeAction() {
+  cancelConfirm()
+  if (!pendingAction) return
+
+  try {
+    if (pendingAction === 'close') {
+      // Märgi kõik positsioonid executed=true
+      const pos = await sb('signals?executed=eq.false&select=id')
+      for (const p of pos) {
+        await fetch(`${SB}/rest/v1/signals?id=eq.${p.id}`, {
+          method: 'PATCH',
+          headers: {'apikey':KEY,'Authorization':`Bearer ${KEY}`,'Content-Type':'application/json','Prefer':'return=minimal'},
+          body: JSON.stringify({executed: true})
+        })
+      }
+      document.getElementById('st').textContent = `SULETUD ${pos.length} POSITSIOONI`
+      setTimeout(loadAll, 2000)
+    }
+    else if (pendingAction === 'stop') {
+      await fetch(`${SB}/rest/v1/bot_state?id=eq.1`, {
+        method: 'PATCH',
+        headers: {'apikey':KEY,'Authorization':`Bearer ${KEY}`,'Content-Type':'application/json','Prefer':'return=minimal'},
+        body: JSON.stringify({stats: {trading_paused: true}})
+      })
+      document.getElementById('stopBtn').style.display = 'none'
+      document.getElementById('startBtn').style.display = 'block'
+      document.getElementById('st').textContent = 'PEATATUD'
+    }
+    else if (pendingAction === 'start') {
+      await fetch(`${SB}/rest/v1/bot_state?id=eq.1`, {
+        method: 'PATCH',
+        headers: {'apikey':KEY,'Authorization':`Bearer ${KEY}`,'Content-Type':'application/json','Prefer':'return=minimal'},
+        body: JSON.stringify({stats: {trading_paused: false}})
+      })
+      document.getElementById('stopBtn').style.display = 'block'
+      document.getElementById('startBtn').style.display = 'none'
+      document.getElementById('st').textContent = 'AKTIIVNE'
+    }
+  } catch(e) {
+    console.error(e)
+    document.getElementById('st').textContent = 'VIGA!'
+  }
+}
 </script>
 </body>
 </html>
