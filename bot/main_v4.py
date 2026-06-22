@@ -97,6 +97,7 @@ def get_balance():
 # ─────────────────────────────────────────────────────────
 
 _cache = {}
+_scalp_cache = {"df": None, "updated": 0}
 
 def get_data(symbol_td, interval="1h", outputsize=100):
     global _cache
@@ -125,6 +126,30 @@ def get_data(symbol_td, interval="1h", outputsize=100):
     except Exception as e:
         logger.error(f"TwelveData {symbol_td}: {e}")
         return _cache.get(cache_key, {}).get("df")
+
+def get_scalp_data():
+    """Laeb Gold 5min andmeid scalping jaoks."""
+    global _scalp_cache
+    now = time.time()
+    if now - _scalp_cache["updated"] < 300 and _scalp_cache["df"] is not None:
+        return _scalp_cache["df"]
+    try:
+        r = requests.get("https://api.twelvedata.com/time_series", params={
+            "symbol": "XAU/USD", "interval": "5min",
+            "outputsize": 50, "apikey": TWELVEDATA_KEY
+        }, timeout=15)
+        data = r.json()
+        if data.get("status") == "error": return _scalp_cache["df"]
+        values = data.get("values", [])
+        if not values: return _scalp_cache["df"]
+        rows = [{"open":float(v["open"]),"high":float(v["high"]),"low":float(v["low"]),"close":float(v["close"])} for v in reversed(values)]
+        df = pd.DataFrame(rows)
+        df.index = pd.to_datetime([v["datetime"] for v in reversed(values)], utc=True)
+        _scalp_cache = {"df": df, "updated": now}
+        return df
+    except Exception as e:
+        logger.error(f"Scalp data: {e}")
+        return _scalp_cache["df"]
 
 def get_price(symbol_td):
     try:
@@ -334,6 +359,45 @@ def run_gold_grid(price, high, low, now):
     if triggered:
         grid_state["pending"] = pending
         save_grid_state(grid_state)
+
+    # ── SCALPING LAYER ───────────────────────────────────
+    # 5min küünlatel põhinev lisasignaal trendi suunas
+    try:
+        df5 = get_scalp_data()
+        if df5 is not None and len(df5) >= 5:
+            last5 = df5.iloc[-1]
+            h5 = float(last5["high"]); l5 = float(last5["low"])
+            range5 = h5 - l5
+
+            # Scalp ainult kui liikumine on piisavalt suur (>$10)
+            if range5 > 10:
+                scalp_positions = [p for p in get_gold_positions() if p.get("session","").startswith("scalp")]
+                if len(scalp_positions) < 2:  # max 2 scalp positsiooni
+                    lot_scalp = round(max(0.01, (balance/ACCOUNT_BALANCE)*0.01), 3)
+
+                    if effective_trend == "bull" and l5 < price - 5:
+                        # Osta pullback trendis
+                        tp_scalp = round(l5 + 10, 2)
+                        sb_insert("signals", {
+                            "direction":"buy","entry":round(l5,2),"tp":tp_scalp,
+                            "sl":round(l5-15,2),"lot":lot_scalp,"regime":"grid",
+                            "session":"scalp_bull","executed":False,"breakeven":False,
+                            "atr":range5,"score":1,"rr":0.67,
+                        })
+                        add_log(f"⚡ Scalp BUY @ {l5:.0f} TP:{tp_scalp:.0f}")
+
+                    elif effective_trend == "bear" and h5 > price + 5:
+                        # Müü rally trendis
+                        tp_scalp = round(h5 - 10, 2)
+                        sb_insert("signals", {
+                            "direction":"sell","entry":round(h5,2),"tp":tp_scalp,
+                            "sl":round(h5+15,2),"lot":lot_scalp,"regime":"grid",
+                            "session":"scalp_bear","executed":False,"breakeven":False,
+                            "atr":range5,"score":1,"rr":0.67,
+                        })
+                        add_log(f"⚡ Scalp SELL @ {h5:.0f} TP:{tp_scalp:.0f}")
+    except Exception as e:
+        logger.error(f"Scalp error: {e}")
 
 # ─────────────────────────────────────────────────────────
 #  STATISTIKA
