@@ -188,7 +188,13 @@ class MeanRevStrategy:
         if len(open_pos) >= self.mr_cfg["max_pos"]: return
 
         atr_val = np.mean([abs(self.highs[i]-self.lows[i]) for i in range(-14,0)]) if len(self.highs) >= 14 else 0.001
-        lot     = self.cfg["lot"]
+        # Risk-based lot: riski max 1.5% kontost per tehing
+        balance = self.get_balance()
+        risk_amount = balance * 0.015
+        pip_value = self.cfg["pip_value"]
+        sl_dist = atr_val * 1.5  # SL = 1.5× ATR
+        lot = risk_amount / (sl_dist * pip_value) if sl_dist > 0 else self.cfg["lot"]
+        lot = max(0.01, min(round(lot, 3), 0.10))  # min 0.01, max 0.10
 
         # SELL — hind üle ülemise bändi + overbought
         if high >= upper and rsi > rsi_ob:

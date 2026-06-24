@@ -94,6 +94,100 @@ def get_balance():
     return ACCOUNT_BALANCE
 
 # ─────────────────────────────────────────────────────────
+#  CIRCUIT BREAKER
+# ─────────────────────────────────────────────────────────
+
+def get_circuit_state():
+    """Loe circuit breaker olek Supabase-st."""
+    rows = sb_select("bot_state", "id=eq.1&select=risk")
+    if rows and rows[0].get("risk"):
+        return rows[0]["risk"].get("circuit", {})
+    return {}
+
+def save_circuit_state(state):
+    """Salvesta circuit breaker olek."""
+    try:
+        rows = sb_select("bot_state", "id=eq.1&select=risk")
+        risk = rows[0].get("risk", {}) if rows else {}
+        risk["circuit"] = state
+        sb_upsert("bot_state", {"id": 1, "risk": risk})
+    except Exception as e:
+        logger.error(f"save_circuit: {e}")
+
+def check_circuit_breaker(balance, now):
+    """
+    Kontrolli circuit breaker tingimusi.
+    Tagastab True kui kauplema võib, False kui peab pausima.
+    """
+    circuit = get_circuit_state()
+    today = now.strftime("%Y-%m-%d")
+    week  = now.strftime("%Y-W%W")
+
+    # Initsialiseeri nädala algus
+    if circuit.get("week") != week:
+        circuit = {
+            "week":              week,
+            "week_start_balance": balance,
+            "day":               today,
+            "day_start_balance": balance,
+            "paused_until_week": None,
+            "paused_until_day":  None,
+        }
+        save_circuit_state(circuit)
+        return True
+
+    # Uuenda päeva algus kui uus päev
+    if circuit.get("day") != today:
+        circuit["day"] = today
+        circuit["day_start_balance"] = balance
+        circuit["paused_until_day"] = None
+        save_circuit_state(circuit)
+
+    # Kontrolli nädalane paus
+    if circuit.get("paused_until_week") == week:
+        add_log("⏸ Circuit breaker: nädalane paus aktiivselt")
+        return False
+
+    # Kontrolli päevane paus
+    if circuit.get("paused_until_day") == today:
+        add_log("⏸ Circuit breaker: päevane paus aktiivselt")
+        return False
+
+    week_start = float(circuit.get("week_start_balance", balance))
+    day_start  = float(circuit.get("day_start_balance", balance))
+
+    # Nädalane drawdown > 15% → paus ülejäänud nädalaks
+    if week_start > 0 and (week_start - balance) / week_start > 0.15:
+        circuit["paused_until_week"] = week
+        save_circuit_state(circuit)
+        msg = f"🛑 CIRCUIT BREAKER: -15% nädalas ({week_start:.2f}€ → {balance:.2f}€) — paus kuni nädala lõpuni!"
+        add_log(msg)
+        send_telegram(f"🛑 <b>CIRCUIT BREAKER AKTIVEERITUD</b>\n{msg}")
+        return False
+
+    # Päevane drawdown > 10% → paus ülejäänud päevaks
+    if day_start > 0 and (day_start - balance) / day_start > 0.10:
+        circuit["paused_until_day"] = today
+        save_circuit_state(circuit)
+        msg = f"⏸ Circuit breaker: -10% päevas ({day_start:.2f}€ → {balance:.2f}€) — paus tänaseks"
+        add_log(msg)
+        send_telegram(f"⏸ <b>Päevane paus</b>\n{msg}")
+        return False
+
+    return True
+
+def get_risk_based_lot(balance, atr_dist, pip_value=100000, risk_pct=0.015):
+    """
+    Risk-põhine lot sizing: riski max 1.5% kontost per tehing.
+    atr_dist: stop distance (price units)
+    pip_value: 100000 forex, 100 gold
+    """
+    if atr_dist <= 0: return 0.01
+    risk_amount = balance * risk_pct
+    lot = risk_amount / (atr_dist * pip_value)
+    return max(0.01, min(round(lot, 3), 0.10))
+
+# ─────────────────────────────────────────────────────────
 #  ANDMED — TwelveData
 # ─────────────────────────────────────────────────────────
 
@@ -495,6 +589,12 @@ def main():
             scan_count += 1
             now = datetime.now(timezone.utc)
             add_log(f"⏱ Scan #{scan_count} — {now.strftime('%H:%M')} UTC")
+
+            # ── CIRCUIT BREAKER KONTROLL ──
+            balance = get_balance()
+            if not check_circuit_breaker(balance, now):
+                time.sleep(SCAN_INTERVAL)
+                continue
 
             # ── GOLD GRID ──
             price_gold = 0
