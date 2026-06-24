@@ -193,6 +193,23 @@ def _run_client():
                 deferred = client.send(req)
                 deferred.addErrback(on_error)
 
+            # Order täitmise vastus
+            elif msg_type == 2126:  # PROTO_OA_EXECUTION_EVENT
+                try:
+                    event = Protobuf.extract(message)
+                    exec_type = event.executionType
+                    if exec_type == 2:  # ORDER_FILLED
+                        pos = event.position
+                        logger.info(f"✅ ORDER TÄIDETUD: {pos.tradeData.tradeSide} {pos.tradeData.symbolId} @ {pos.price/100000:.5f} vol:{pos.tradeData.volume}")
+                    elif exec_type == 3:  # ORDER_CANCELLED
+                        logger.warning(f"⚠️ ORDER TÜHISTATUD: {event}")
+                    elif exec_type == 9:  # ORDER_REJECTED
+                        logger.error(f"❌ ORDER TAGASI LÜKATUD: {event}")
+                    else:
+                        logger.info(f"Order event type: {exec_type}")
+                except Exception as e:
+                    logger.error(f"Order response parse error: {e}")
+
             # Sümbolite nimekiri
             elif msg_type == 2115:  # PROTO_OA_SYMBOLS_LIST_RES
                 symbols_list = Protobuf.extract(message)
@@ -318,6 +335,17 @@ def place_order(direction, symbol_name, lot, tp=None, sl=None):
             req.stopLoss = int(round(sl * 100000))
 
         deferred = _client.send(req)
+        
+        def on_order_response(result):
+            logger.info(f"cTrader order response: {result}")
+            return result
+        
+        def on_order_error(failure):
+            logger.error(f"cTrader order failed: {failure}")
+            return failure
+        
+        deferred.addCallback(on_order_response)
+        deferred.addErrback(on_order_error)
         logger.info(f"✅ cTrader ORDER: {direction.upper()} {ct_sym} {lot}lot | TP:{tp} SL:{sl}")
         return deferred
 
