@@ -232,8 +232,8 @@ def start():
     thread.start()
     logger.info("cTrader thread käivitatud")
 
-    # Oota kuni ühendus loodud (max 15 sek)
-    for i in range(15):
+    # Oota kuni ühendus loodud (max 30 sek)
+    for i in range(30):
         if _connected:
             logger.info("✅ cTrader WebSocket ühendus loodud!")
             return
