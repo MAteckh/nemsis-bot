@@ -136,6 +136,7 @@ def _run_client():
         def on_message(client, message):
             global _connected
             msg_type = message.payloadType
+            logger.info(f"cTrader msg_type: {msg_type}")
 
             # App auth vastus
             if msg_type == 2101:  # PROTO_OA_APPLICATION_AUTH_RES
