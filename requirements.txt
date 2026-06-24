@@ -6,3 +6,4 @@ anthropic
 ctrader-open-api==0.9.2
 pyOpenSSL==24.1.0
 cryptography==42.0.8
+service_identity==21.1.0
