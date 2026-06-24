@@ -109,8 +109,8 @@ def _run_client():
         )
         from ctrader_open_api.messages.OpenApiMessages_pb2 import (
             ProtoOAApplicationAuthReq, ProtoOAAccountAuthReq,
-            ProtoOASubscribeSpotsReq, ProtoOAGetSymbolsReq,
-            ProtoOANewOrderReq, ProtoOAClosePositionReq,
+            ProtoOASubscribeSpotsReq, ProtoOASymbolsListReq,
+            ProtoOANewOrderReq,
         )
         from twisted.internet import reactor, ssl
 
@@ -152,7 +152,7 @@ def _run_client():
                 _connected = True
                 logger.info(f"✅ cTrader konto {ACCOUNT_ID} autentitud — reaalajas hinnad algavad")
                 # Telli kõik sümboli IDs
-                req = ProtoOAGetSymbolsReq()
+                req = ProtoOASymbolsListReq()
                 req.ctidTraderAccountId = ACCOUNT_ID
                 deferred = client.send(req)
                 deferred.addErrback(on_error)
