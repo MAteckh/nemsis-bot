@@ -130,8 +130,6 @@ def _run_client():
             global _connected
             _connected = False
             logger.warning(f"cTrader TCP ühendus katkes: {reason}")
-            # Reconnect 30 sekundi pärast
-            reactor.callLater(30, _run_client)
 
         def on_message(client, message):
             global _connected
@@ -162,16 +160,21 @@ def _run_client():
                 logger.info(f"cTrader kontod:")
                 target_id = None
                 for acc in accounts.ctidTraderAccount:
-                    logger.info(f"  ctidTraderAccountId={acc.ctidTraderAccountId} brokerName={acc.brokerName} live={acc.isLive}")
+                    # Logi kõik saadaval väljad
+                    acc_dict = {}
+                    for field in acc.DESCRIPTOR.fields:
+                        try:
+                            acc_dict[field.name] = getattr(acc, field.name)
+                        except:
+                            pass
+                    logger.info(f"  konto: {acc_dict}")
                     if acc.isLive:
                         target_id = acc.ctidTraderAccountId
-                
+
                 if target_id:
                     logger.info(f"✅ Kasutan ctidTraderAccountId={target_id}")
-                    # Salvesta õige ID
                     global ACCOUNT_ID
                     ACCOUNT_ID = target_id
-                    # Account auth õige ID-ga
                     req = ProtoOAAccountAuthReq()
                     req.ctidTraderAccountId = target_id
                     req.accessToken = ACCESS_TOKEN
