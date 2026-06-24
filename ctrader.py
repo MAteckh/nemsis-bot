@@ -134,7 +134,6 @@ def _run_client():
         def on_message(client, message):
             global _connected
             msg_type = message.payloadType
-            logger.info(f"cTrader msg_type: {msg_type}")
 
             # Error vastus
             if msg_type == 2142:
