@@ -464,25 +464,27 @@ def run_gold_grid(price, high, low, now):
                     lot_scalp = round(max(0.01, (balance/ACCOUNT_BALANCE)*0.01), 3)
 
                     if effective_trend == "bull" and l5 < price - 5:
-                        # Osta pullback trendis
                         tp_scalp = round(l5 + 10, 2)
+                        sl_scalp = round(l5 - 15, 2)
                         sb_insert("signals", {
                             "direction":"buy","entry":round(l5,2),"tp":tp_scalp,
-                            "sl":round(l5-15,2),"lot":lot_scalp,"regime":"grid",
+                            "sl":sl_scalp,"lot":lot_scalp,"regime":"grid",
                             "session":"scalp_bull","executed":False,"breakeven":False,
                             "atr":range5,"score":1,"rr":0.67,
                         })
+                        ct.place_order("buy", "XAUUSD", lot_scalp, tp=tp_scalp, sl=sl_scalp)
                         add_log(f"⚡ Scalp BUY @ {l5:.0f} TP:{tp_scalp:.0f}")
 
                     elif effective_trend == "bear" and h5 > price + 5:
-                        # Müü rally trendis
                         tp_scalp = round(h5 - 10, 2)
+                        sl_scalp = round(h5 + 15, 2)
                         sb_insert("signals", {
                             "direction":"sell","entry":round(h5,2),"tp":tp_scalp,
-                            "sl":round(h5+15,2),"lot":lot_scalp,"regime":"grid",
+                            "sl":sl_scalp,"lot":lot_scalp,"regime":"grid",
                             "session":"scalp_bear","executed":False,"breakeven":False,
                             "atr":range5,"score":1,"rr":0.67,
                         })
+                        ct.place_order("sell", "XAUUSD", lot_scalp, tp=tp_scalp, sl=sl_scalp)
                         add_log(f"⚡ Scalp SELL @ {h5:.0f} TP:{tp_scalp:.0f}")
     except Exception as e:
         logger.error(f"Scalp error: {e}")
