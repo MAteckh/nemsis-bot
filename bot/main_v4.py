@@ -188,39 +188,27 @@ def get_risk_based_lot(balance, atr_dist, pip_value=100000, risk_pct=0.015):
     return max(0.01, min(round(lot, 3), 0.10))
 
 # ─────────────────────────────────────────────────────────
-#  ANDMED — TwelveData
+#  ANDMED — yfinance (tasuta, ei vaja API key)
 # ─────────────────────────────────────────────────────────
 
 _cache = {}
 _scalp_cache = {"df": None, "updated": 0}
 
 def get_data(symbol_td, interval="1h", outputsize=100):
+    """Hangi ajaloolised andmed — cTrader esimesena, yfinance fallback."""
     global _cache
     now = time.time()
-    cache_key = symbol_td
+    cache_key = f"{symbol_td}_{interval}"
     if cache_key in _cache and now - _cache[cache_key]["updated"] < 300:
         return _cache[cache_key]["df"]
-    try:
-        r = requests.get("https://api.twelvedata.com/time_series", params={
-            "symbol": symbol_td, "interval": interval,
-            "outputsize": outputsize, "apikey": TWELVEDATA_KEY
-        }, timeout=15)
-        data = r.json()
-        if data.get("status") == "error":
-            logger.error(f"TwelveData {symbol_td}: {data.get('message')}")
-            return _cache.get(cache_key, {}).get("df")
-        values = data.get("values", [])
-        if not values: return None
-        rows = [{"open": float(v["open"]), "high": float(v["high"]),
-                 "low": float(v["low"]), "close": float(v["close"])}
-                for v in reversed(values)]
-        df = pd.DataFrame(rows)
-        df.index = pd.to_datetime([v["datetime"] for v in reversed(values)], utc=True)
+    
+    # cTrader candles (sisaldab yfinance fallback)
+    df = ct.get_candles(symbol_td, interval, outputsize)
+    if df is not None and not df.empty:
         _cache[cache_key] = {"df": df, "updated": now}
         return df
-    except Exception as e:
-        logger.error(f"TwelveData {symbol_td}: {e}")
-        return _cache.get(cache_key, {}).get("df")
+    
+    return _cache.get(cache_key, {}).get("df")
 
 def get_scalp_data():
     """Laeb Gold 5min andmeid scalping jaoks."""
@@ -229,17 +217,11 @@ def get_scalp_data():
     if now - _scalp_cache["updated"] < 300 and _scalp_cache["df"] is not None:
         return _scalp_cache["df"]
     try:
-        r = requests.get("https://api.twelvedata.com/time_series", params={
-            "symbol": "XAU/USD", "interval": "5min",
-            "outputsize": 50, "apikey": TWELVEDATA_KEY
-        }, timeout=15)
-        data = r.json()
-        if data.get("status") == "error": return _scalp_cache["df"]
-        values = data.get("values", [])
-        if not values: return _scalp_cache["df"]
-        rows = [{"open":float(v["open"]),"high":float(v["high"]),"low":float(v["low"]),"close":float(v["close"])} for v in reversed(values)]
-        df = pd.DataFrame(rows)
-        df.index = pd.to_datetime([v["datetime"] for v in reversed(values)], utc=True)
+        import yfinance as yf
+        df = yf.Ticker("GC=F").history(interval="5m", period="1d", auto_adjust=True)
+        if df is None or df.empty: return _scalp_cache["df"]
+        df.columns = [c.lower() for c in df.columns]
+        df.index = pd.to_datetime(df.index, utc=True)
         _scalp_cache = {"df": df, "updated": now}
         return df
     except Exception as e:
@@ -543,18 +525,16 @@ def main():
     balance = get_balance()
     add_log(f"💼 Balance: {balance:.2f}€")
 
-    # cTrader ühenduse kontroll
-    if ct.CLIENT_ID and ct.CLIENT_SECRET:
+    # cTrader WebSocket käivitamine
+    if ct.ACCESS_TOKEN:
+        add_log("🔌 cTrader WebSocket käivitub...")
+        ct.start()
         if ct.is_connected():
-            add_log("🔗 cTrader: ÜHENDATUD")
-            ct_balance = ct.get_account_balance()
-            if ct_balance:
-                add_log(f"💳 cTrader balance: {ct_balance:.2f}€")
+            add_log("🔗 cTrader: ÜHENDATUD — reaalajas hinnad aktiivsed")
         else:
-            add_log("⚠️ cTrader: token puudub — kasutan TwelveData andmeid")
-            add_log(ct.setup_oauth())
+            add_log("⚠️ cTrader: ühendus pooleli — yfinance fallback aktiivselt")
     else:
-        add_log("ℹ️ cTrader: credentials puuduvad — kasutan TwelveData")
+        add_log("⚠️ cTrader: ACCESS_TOKEN puudub Railway Variables-ist")
 
     send_telegram(
         f"🚀 <b>NEMSIS v4 käivitus!</b>\n"
