@@ -146,15 +146,39 @@ def _run_client():
                 except Exception as e:
                     logger.error(f"cTrader ERROR (raw): {message}")
 
-            # App auth vastus
-            if msg_type == 2101:  # PROTO_OA_APPLICATION_AUTH_RES
+            # App auth vastus — küsi konto nimekiri
+            elif msg_type == 2101:
                 logger.info("✅ cTrader App auth OK")
-                # Account auth
-                req = ProtoOAAccountAuthReq()
-                req.ctidTraderAccountId = ACCOUNT_ID
-                req.accessToken         = ACCESS_TOKEN
+                # Hangi kõik kontod et leida õige ctidTraderAccountId
+                from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOAGetAccountListByAccessTokenReq
+                req = ProtoOAGetAccountListByAccessTokenReq()
+                req.accessToken = ACCESS_TOKEN
                 deferred = client.send(req)
                 deferred.addErrback(on_error)
+
+            # Kontode nimekiri — leia õige ID
+            elif msg_type == 2150:
+                accounts = Protobuf.extract(message)
+                logger.info(f"cTrader kontod:")
+                target_id = None
+                for acc in accounts.ctidTraderAccount:
+                    logger.info(f"  ctidTraderAccountId={acc.ctidTraderAccountId} brokerName={acc.brokerName} live={acc.isLive}")
+                    if acc.isLive:
+                        target_id = acc.ctidTraderAccountId
+                
+                if target_id:
+                    logger.info(f"✅ Kasutan ctidTraderAccountId={target_id}")
+                    # Salvesta õige ID
+                    global ACCOUNT_ID
+                    ACCOUNT_ID = target_id
+                    # Account auth õige ID-ga
+                    req = ProtoOAAccountAuthReq()
+                    req.ctidTraderAccountId = target_id
+                    req.accessToken = ACCESS_TOKEN
+                    deferred = client.send(req)
+                    deferred.addErrback(on_error)
+                else:
+                    logger.error("cTrader: live kontot ei leitud!")
 
             # Account auth vastus
             elif msg_type == 2103:  # PROTO_OA_ACCOUNT_AUTH_RES
