@@ -201,13 +201,20 @@ class MeanRevStrategy:
             exists = any(p["direction"]=="sell" and abs(float(p["entry"])-price) < atr_val for p in open_pos)
             if not exists:
                 tp = round(price - atr_val, 5)
+                sl = round(price + atr_val*3, 5)
                 self.sb_insert("signals", {
                     "direction": "sell", "entry": round(price,5), "tp": tp,
-                    "sl": round(price + atr_val*3, 5),
+                    "sl": sl,
                     "lot": lot, "session": self.symbol,
                     "regime": "meanrev", "executed": False, "breakeven": False,
                     "atr": round(atr_val, 6), "score": int(rsi),
                 })
+                # Päris cTrader order
+                try:
+                    import ctrader as ct
+                    ct.place_order("sell", self.symbol, lot, tp=tp, sl=sl)
+                except Exception as e:
+                    self.logger.error(f"cTrader order {self.symbol}: {e}")
                 self.add_log(f"📊 {self.symbol} SELL @ {price:.5f} | RSI:{rsi:.0f} | BB upper")
 
         # BUY — hind alla alumise bändi + oversold
@@ -215,11 +222,18 @@ class MeanRevStrategy:
             exists = any(p["direction"]=="buy" and abs(float(p["entry"])-price) < atr_val for p in open_pos)
             if not exists:
                 tp = round(price + atr_val, 5)
+                sl = round(price - atr_val*3, 5)
                 self.sb_insert("signals", {
                     "direction": "buy", "entry": round(price,5), "tp": tp,
-                    "sl": round(price - atr_val*3, 5),
+                    "sl": sl,
                     "lot": lot, "session": self.symbol,
                     "regime": "meanrev", "executed": False, "breakeven": False,
                     "atr": round(atr_val, 6), "score": int(rsi),
                 })
+                # Päris cTrader order
+                try:
+                    import ctrader as ct
+                    ct.place_order("buy", self.symbol, lot, tp=tp, sl=sl)
+                except Exception as e:
+                    self.logger.error(f"cTrader order {self.symbol}: {e}")
                 self.add_log(f"📊 {self.symbol} BUY @ {price:.5f} | RSI:{rsi:.0f} | BB lower")

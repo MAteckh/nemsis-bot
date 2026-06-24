@@ -35,6 +35,7 @@ _client      = None
 _connected   = False
 _prices      = {}       # symbol → {"bid": x, "ask": x, "time": t}
 _candles     = {}       # symbol_interval → DataFrame
+_symbol_ids  = {}       # symbolName → symbolId
 _lock        = threading.Lock()
 
 def is_connected():
@@ -114,7 +115,7 @@ def _run_client():
         )
         from twisted.internet import reactor, ssl
 
-        symbol_ids = {}  # name → symbolId
+        symbol_ids = _symbol_ids  # viide globaalsele
 
         def on_connected(client):
             global _connected
@@ -283,43 +284,45 @@ def place_order(direction, symbol_name, lot, tp=None, sl=None):
     direction: "buy" või "sell"
     symbol_name: "XAUUSD" vm
     lot: 0.01 vm
+    Tagastab order_id kui õnnestus, None kui ebaõnnestus.
     """
     if not _connected or not _client:
-        logger.warning("⚠️ cTrader: ei ole ühendust — order salvestatud ainult Supabase'i")
+        logger.warning(f"⚠️ cTrader place_order: ei ole ühendust ({symbol_name})")
+        return None
+
+    ct_sym = SYMBOL_MAP.get(symbol_name, symbol_name)
+    sym_id = _symbol_ids.get(ct_sym)
+
+    if not sym_id:
+        logger.error(f"cTrader place_order: symbol ID puudub {ct_sym}")
         return None
 
     try:
-        from ctrader_open_api.messages.OpenApiMessages_pb2 import (
-            ProtoOANewOrderReq, ProtoOATradeSide, ProtoOAOrderType
-        )
+        from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOANewOrderReq
+        from ctrader_open_api.messages.OpenApiCommonMessages_pb2 import ProtoHeartbeatEvent
 
-        # Leia symbol ID
-        ct_sym = SYMBOL_MAP.get(symbol_name, symbol_name)
-        sym_id = None
-        with _lock:
-            # Otsi symbol_ids-ist
-            pass  # symbol_ids on lokaalses _run_client scopis
-            # Kasutame otsest API kõnet
-        
-        volume = int(lot * 100)  # cTrader: 1 lot = 100 units
+        volume = int(lot * 100)  # 0.01 lot = 1 unit, 1 lot = 100 units
 
         req = ProtoOANewOrderReq()
         req.ctidTraderAccountId = ACCOUNT_ID
-        req.symbolId   = sym_id or 0  # täiendame kui symbol ID teada
-        req.orderType  = 1  # MARKET
-        req.tradeSide  = 1 if direction == "buy" else 2  # BUY=1, SELL=2
+        req.symbolId   = sym_id
+        req.orderType  = 1   # MARKET
+        req.tradeSide  = 1 if direction == "buy" else 2
         req.volume     = volume
         req.label      = "NEMSIS"
+        req.comment    = f"NEMSIS {direction.upper()} {ct_sym}"
 
-        if tp: req.takeProfit = int(tp * 100000)
-        if sl: req.stopLoss   = int(sl * 100000)
+        if tp:
+            req.takeProfit = int(round(tp * 100000))
+        if sl:
+            req.stopLoss = int(round(sl * 100000))
 
         deferred = _client.send(req)
-        logger.info(f"✅ Order saadetud: {direction.upper()} {ct_sym} {lot}lot")
+        logger.info(f"✅ cTrader ORDER: {direction.upper()} {ct_sym} {lot}lot | TP:{tp} SL:{sl}")
         return deferred
 
     except Exception as e:
-        logger.error(f"cTrader place_order: {e}")
+        logger.error(f"cTrader place_order {symbol_name}: {e}")
         return None
 
 def get_account_balance():

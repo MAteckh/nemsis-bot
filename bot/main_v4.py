@@ -429,12 +429,15 @@ def run_gold_grid(price, high, low, now):
         if len(same) >= gl: continue
         lot = get_compound_lot(balance)
         tp  = round(level+gs if direction=="buy" else level-gs, 2)
+        sl  = round(level-gs*3 if direction=="buy" else level+gs*3, 2)
         sb_insert("signals", {
             "direction":direction,"entry":level,"tp":tp,
-            "sl":round(level-gs*3 if direction=="buy" else level+gs*3,2),
+            "sl":sl,
             "lot":lot,"regime":"grid","session":f"gold_{effective_trend}",
             "executed":False,"breakeven":False,"atr":gs,"score":0,"rr":3.0,
         })
+        # Saada päris order cTrader kontole
+        ct.place_order(direction, "XAUUSD", lot, tp=tp, sl=sl)
         triggered.append(level_str)
         add_log(f"📊 Gold order: {direction.upper()} @ {level:.0f}  TP:{tp:.0f}")
         send_telegram(f"📊 <b>Gold Grid Order</b>\n{direction.upper()} @ <b>{level:.0f}</b>\nTP: <b>{tp:.0f}</b> | {effective_trend}")
