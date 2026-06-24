@@ -138,6 +138,14 @@ def _run_client():
             msg_type = message.payloadType
             logger.info(f"cTrader msg_type: {msg_type}")
 
+            # Error vastus
+            if msg_type == 2142:
+                try:
+                    error = Protobuf.extract(message)
+                    logger.error(f"cTrader ERROR: {error.errorCode} — {error.description}")
+                except Exception as e:
+                    logger.error(f"cTrader ERROR (raw): {message}")
+
             # App auth vastus
             if msg_type == 2101:  # PROTO_OA_APPLICATION_AUTH_RES
                 logger.info("✅ cTrader App auth OK")
