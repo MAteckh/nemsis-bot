@@ -194,24 +194,17 @@ def _run_client():
                 deferred = client.send(req)
                 deferred.addErrback(on_error)
 
-            # Order täitmise vastus
-            elif msg_type == 2126:  # PROTO_OA_EXECUTION_EVENT
+            # Order täitmise vastus — logi KÕIK
+            elif msg_type == 2126:
                 try:
                     event = Protobuf.extract(message)
-                    exec_type = event.executionType
-                    if exec_type == 2:  # ORDER_ACCEPTED
-                        logger.info(f"✅ ORDER AKTSEPTEERITUD")
-                    elif exec_type == 3:  # ORDER_FILLED
-                        pos = event.position
-                        logger.info(f"✅ ORDER TÄIDETUD: positionId={pos.positionId} price={pos.price/100000:.5f}")
-                    elif exec_type == 7:  # ORDER_REJECTED
-                        logger.error(f"❌ ORDER TAGASI LÜKATUD: {event}")
-                    elif exec_type == 5:  # ORDER_CANCELLED
-                        logger.warning(f"⚠️ ORDER TÜHISTATUD")
-                    else:
-                        logger.info(f"Order execution type: {exec_type}")
+                    logger.info(f"🔔 EXECUTION EVENT: type={event.executionType} errorCode={event.errorCode if event.errorCode else 'none'}")
+                    if event.order:
+                        logger.info(f"  Order: id={event.order.orderId} status={event.order.orderStatus} vol={event.order.tradeData.volume}")
+                    if event.position:
+                        logger.info(f"  Position: id={event.position.positionId} price={event.position.price}")
                 except Exception as e:
-                    logger.error(f"Order response parse error: {e}")
+                    logger.error(f"Execution event parse: {e}")
 
             # Sümbolite nimekiri
             elif msg_type == 2115:  # PROTO_OA_SYMBOLS_LIST_RES
@@ -256,6 +249,14 @@ def _run_client():
             # Heartbeat
             elif msg_type == 51:
                 pass  # normaalne
+
+            # Order error event
+            elif msg_type == 2132:  # PROTO_OA_ORDER_ERROR_EVENT
+                try:
+                    event = Protobuf.extract(message)
+                    logger.error(f"❌ ORDER ERROR: {event.errorCode} — {event.description}")
+                except Exception as e:
+                    logger.error(f"Order error event: {e}")
 
         def on_error(failure):
             logger.error(f"cTrader error: {failure}")
