@@ -590,6 +590,12 @@ def main():
             if INSTRUMENTS["XAUUSD"]["enabled"]:
                 try:
                     price_gold = get_price("XAU/USD")
+                    # Kui hind veel ei tulnud, oota ja proovi uuesti (max 10 sek)
+                    retry = 0
+                    while price_gold == 0 and retry < 10:
+                        time.sleep(1)
+                        price_gold = get_price("XAU/USD")
+                        retry += 1
                     if price_gold > 0:
                         # Gold grid ei vaja BB/RSI — ainult hind ja trend
                         # high/low: kasuta ±0.5% hinnast kui df puudub
