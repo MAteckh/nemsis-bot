@@ -222,9 +222,11 @@ def _run_client():
                 for sym in symbols_list.symbol:
                     if sym.symbolName in our_symbols:
                         symbol_ids[sym.symbolName] = sym.symbolId
-                        _symbol_lot_sizes[sym.symbolName] = sym.lotSize if sym.lotSize > 0 else 100000
+                        # ICMarkets: kõik instrumendid lotSize=100000 (0.01 lot = 1000 units)
+                        lot_size = 100000
+                        _symbol_lot_sizes[sym.symbolName] = lot_size
                         ids_to_subscribe.append(sym.symbolId)
-                        logger.info(f"  Symbol: {sym.symbolName} → ID:{sym.symbolId} lotSize:{sym.lotSize} minVol:{sym.minVolume}")
+                        logger.info(f"  Symbol: {sym.symbolName} → ID:{sym.symbolId} lotSize:{lot_size}")
 
                 if ids_to_subscribe:
                     # Telli spot hinnad
