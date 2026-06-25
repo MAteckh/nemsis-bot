@@ -31,12 +31,13 @@ SYMBOL_MAP = {
 }
 
 # Globaalne state
-_client      = None
-_connected   = False
-_prices      = {}       # symbol → {"bid": x, "ask": x, "time": t}
-_candles     = {}       # symbol_interval → DataFrame
-_symbol_ids  = {}       # symbolName → symbolId
-_lock        = threading.Lock()
+_client          = None
+_connected       = False
+_prices          = {}       # symbol → {"bid": x, "ask": x, "time": t}
+_candles         = {}       # symbol_interval → DataFrame
+_symbol_ids      = {}       # symbolName → symbolId
+_symbol_lot_sizes = {}      # symbolName → lotSize
+_lock            = threading.Lock()
 
 def is_connected():
     return _connected and ACCESS_TOKEN != ""
@@ -198,15 +199,17 @@ def _run_client():
                 try:
                     event = Protobuf.extract(message)
                     exec_type = event.executionType
-                    if exec_type == 2:  # ORDER_FILLED
+                    if exec_type == 2:  # ORDER_ACCEPTED
+                        logger.info(f"✅ ORDER AKTSEPTEERITUD")
+                    elif exec_type == 3:  # ORDER_FILLED
                         pos = event.position
-                        logger.info(f"✅ ORDER TÄIDETUD: {pos.tradeData.tradeSide} {pos.tradeData.symbolId} @ {pos.price/100000:.5f} vol:{pos.tradeData.volume}")
-                    elif exec_type == 3:  # ORDER_CANCELLED
-                        logger.warning(f"⚠️ ORDER TÜHISTATUD: {event}")
-                    elif exec_type == 9:  # ORDER_REJECTED
+                        logger.info(f"✅ ORDER TÄIDETUD: positionId={pos.positionId} price={pos.price/100000:.5f}")
+                    elif exec_type == 7:  # ORDER_REJECTED
                         logger.error(f"❌ ORDER TAGASI LÜKATUD: {event}")
+                    elif exec_type == 5:  # ORDER_CANCELLED
+                        logger.warning(f"⚠️ ORDER TÜHISTATUD")
                     else:
-                        logger.info(f"Order event type: {exec_type}")
+                        logger.info(f"Order execution type: {exec_type}")
                 except Exception as e:
                     logger.error(f"Order response parse error: {e}")
 
@@ -219,8 +222,9 @@ def _run_client():
                 for sym in symbols_list.symbol:
                     if sym.symbolName in our_symbols:
                         symbol_ids[sym.symbolName] = sym.symbolId
+                        _symbol_lot_sizes[sym.symbolName] = sym.lotSize if sym.lotSize > 0 else 100000
                         ids_to_subscribe.append(sym.symbolId)
-                        logger.info(f"  Symbol: {sym.symbolName} → ID:{sym.symbolId}")
+                        logger.info(f"  Symbol: {sym.symbolName} → ID:{sym.symbolId} lotSize:{sym.lotSize} minVol:{sym.minVolume}")
 
                 if ids_to_subscribe:
                     # Telli spot hinnad
@@ -307,8 +311,9 @@ def place_order(direction, symbol_name, lot, tp=None, sl=None):
         logger.warning(f"⚠️ cTrader place_order: ei ole ühendust ({symbol_name})")
         return None
 
-    ct_sym = SYMBOL_MAP.get(symbol_name, symbol_name)
-    sym_id = _symbol_ids.get(ct_sym)
+    ct_sym   = SYMBOL_MAP.get(symbol_name, symbol_name)
+    sym_id   = _symbol_ids.get(ct_sym)
+    lot_size = _symbol_lot_sizes.get(ct_sym, 100000)
 
     if not sym_id:
         logger.error(f"cTrader place_order: symbol ID puudub {ct_sym}")
@@ -316,9 +321,9 @@ def place_order(direction, symbol_name, lot, tp=None, sl=None):
 
     try:
         from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOANewOrderReq
-        from ctrader_open_api.messages.OpenApiCommonMessages_pb2 import ProtoHeartbeatEvent
 
-        volume = int(lot * 100)  # 0.01 lot = 1 unit, 1 lot = 100 units
+        volume = int(lot * lot_size)
+        logger.info(f"cTrader order: {direction.upper()} {ct_sym} lot={lot} volume={volume} lotSize={lot_size}")
 
         req = ProtoOANewOrderReq()
         req.ctidTraderAccountId = ACCOUNT_ID
