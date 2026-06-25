@@ -348,10 +348,13 @@ def run_gold_grid(price, high, low, now):
     gl     = GRID_CONFIG["levels"]
     mfl    = GRID_CONFIG["max_float"]
 
-    df     = get_data(cfg["symbol_td"])
-    if df is None: return
-    calc_atr_gold(df)
-    trend  = get_trend(df)
+    # Trend arvutus — kasuta df kui saadaval, muidu kasuta price liikumist
+    df = get_data(cfg["symbol_td"])
+    if df is not None:
+        calc_atr_gold(df)
+        trend = get_trend(df)
+    else:
+        trend = "neutral"  # fallback kui yfinance ei tööta
 
     # Claude AI
     atr_val = _atr_history[-1] if _atr_history else 20.0
@@ -362,6 +365,7 @@ def run_gold_grid(price, high, low, now):
 
     balance    = get_balance()
     grid_state = get_grid_state()
+    add_log(f"🔍 Grid state: {grid_state is not None} | trend:{effective_trend} | pending:{len(grid_state.get('pending',{})) if grid_state else 0}")
 
     if grid_state is None:
         if effective_trend == "neutral": return
@@ -585,15 +589,22 @@ def main():
             price_gold = 0
             if INSTRUMENTS["XAUUSD"]["enabled"]:
                 try:
-                    df_gold = get_data("XAU/USD")
                     price_gold = get_price("XAU/USD")
-                    if price_gold == 0 and df_gold is not None:
-                        price_gold = float(df_gold["close"].iloc[-1])
-                    if price_gold > 0 and df_gold is not None:
-                        high_gold = float(df_gold["high"].iloc[-1])
-                        low_gold  = float(df_gold["low"].iloc[-1])
+                    if price_gold > 0:
+                        # Gold grid ei vaja BB/RSI — ainult hind ja trend
+                        # high/low: kasuta ±0.5% hinnast kui df puudub
+                        df_gold = get_data("XAU/USD")
+                        if df_gold is not None and len(df_gold) > 1:
+                            high_gold = float(df_gold["high"].iloc[-1])
+                            low_gold  = float(df_gold["low"].iloc[-1])
+                        else:
+                            # Fallback: kasuta ±0.3% hinnast
+                            high_gold = round(price_gold * 1.003, 2)
+                            low_gold  = round(price_gold * 0.997, 2)
                         add_log(f"🥇 Gold: ${price_gold:.2f}")
                         run_gold_grid(price_gold, high_gold, low_gold, now)
+                    else:
+                        add_log("⚠️ Gold: hind puudub cTrader-ist")
                 except Exception as e:
                     add_log(f"❌ Gold error: {e}")
 
