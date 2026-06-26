@@ -175,14 +175,9 @@ class MeanRevStrategy:
             if adx > self.mr_cfg["adx_max"]:
                 return  # trending → ei kauple
 
-        # Bollinger + RSI
-        lower, ma, upper = calc_bollinger(self.closes, self.mr_cfg["bb_period"], self.mr_cfg["bb_std"])
-        if lower is None: return
+        # RSI ainult — Bollinger eemaldatud (liiga range, ei andnud signaale)
         rsi = calc_rsi(self.closes, self.mr_cfg["rsi_period"])
-
-        # RSI per paar — optimeeritud seadistused
-        rsi_per_pair = self.mr_cfg.get("rsi_per_pair", {})
-        rsi_ob, rsi_os = rsi_per_pair.get(self.symbol, (self.mr_cfg["rsi_ob"], self.mr_cfg["rsi_os"]))
+        rsi_ob, rsi_os = 70, 30
 
         open_pos = self.get_open_positions()
         if len(open_pos) >= self.mr_cfg["max_pos"]: return
@@ -196,8 +191,8 @@ class MeanRevStrategy:
         lot = risk_amount / (sl_dist * pip_value) if sl_dist > 0 else self.cfg["lot"]
         lot = max(0.01, min(round(lot, 3), 0.10))  # min 0.01, max 0.10
 
-        # SELL — hind üle ülemise bändi + overbought
-        if high >= upper and rsi > rsi_ob:
+        # SELL — RSI overbought (Bollinger eemaldatud)
+        if rsi > rsi_ob:
             exists = any(p["direction"]=="sell" and abs(float(p["entry"])-price) < atr_val for p in open_pos)
             if not exists:
                 tp = round(price - atr_val, 5)
@@ -217,8 +212,8 @@ class MeanRevStrategy:
                     self.logger.error(f"cTrader order {self.symbol}: {e}")
                 self.add_log(f"📊 {self.symbol} SELL @ {price:.5f} | RSI:{rsi:.0f} | BB upper")
 
-        # BUY — hind alla alumise bändi + oversold
-        if low <= lower and rsi < rsi_os:
+        # BUY — RSI oversold (Bollinger eemaldatud)
+        if rsi < rsi_os:
             exists = any(p["direction"]=="buy" and abs(float(p["entry"])-price) < atr_val for p in open_pos)
             if not exists:
                 tp = round(price + atr_val, 5)
