@@ -4,7 +4,7 @@ Päris ühendus ICMarkets cTrader kontoga
 Kasutab Spotware ametlikku ctrader-open-api teeki
 Annab reaalajas hinnad + saadab päris ordereid
 """
-import os, time, logging, threading
+import os, time, logging, threading, requests
 from datetime import datetime, timezone
 
 logger = logging.getLogger("NEMSIS_CTRADER")
@@ -282,11 +282,55 @@ def _run_client():
         logger.error(f"cTrader client viga: {e}")
         _connected = False
 
+def refresh_access_token():
+    """
+    Uuenda access token refresh tokeni abil.
+    Käivitatakse automaatselt iga 25 päeva tagant.
+    """
+    global ACCESS_TOKEN, REFRESH_TOKEN
+    if not REFRESH_TOKEN or not CLIENT_ID or not CLIENT_SECRET:
+        logger.warning("Token refresh: puuduvad credentials")
+        return False
+    try:
+        r = requests.get(
+            "https://openapi.ctrader.com/apps/token",
+            params={
+                "grant_type": "refresh_token",
+                "refresh_token": REFRESH_TOKEN,
+                "client_id": CLIENT_ID,
+                "client_secret": CLIENT_SECRET,
+            },
+            timeout=15
+        )
+        data = r.json()
+        if data.get("accessToken"):
+            ACCESS_TOKEN = data["accessToken"]
+            REFRESH_TOKEN = data.get("refreshToken", REFRESH_TOKEN)
+            logger.info("✅ cTrader token uuendatud edukalt")
+            return True
+        else:
+            logger.error(f"Token refresh ebaõnnestus: {data}")
+            return False
+    except Exception as e:
+        logger.error(f"Token refresh viga: {e}")
+        return False
+
+def _token_refresh_loop():
+    """Uuenda token iga 25 päeva tagant (token kehtib 30 päeva)."""
+    while True:
+        time.sleep(25 * 24 * 60 * 60)  # 25 päeva
+        logger.info("🔄 Token refresh alustab...")
+        refresh_access_token()
+
 def start():
     """Käivita cTrader WebSocket eraldi threadis."""
     if not ACCESS_TOKEN:
         logger.warning("cTrader: ACCESS_TOKEN puudub Railway Variables-ist")
         return
+
+    # Käivita token refresh thread
+    refresh_thread = threading.Thread(target=_token_refresh_loop, daemon=True, name="TokenRefresh")
+    refresh_thread.start()
 
     thread = threading.Thread(target=_run_client, daemon=True, name="cTrader")
     thread.start()
