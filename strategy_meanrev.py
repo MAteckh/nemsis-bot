@@ -76,7 +76,7 @@ class MeanRevStrategy:
 
     def run(self, price, high, low, now):
         self.update_data(high, low, price)
-        if len(self.closes) < 25: return
+        if len(self.closes) < 15: return
 
         # ── SPREAD FILTER ──────────────────────────────────
         # Kõrge spread = ära kauple (öösel, uudiste ajal)
