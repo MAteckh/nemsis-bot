@@ -198,8 +198,8 @@ class MeanRevStrategy:
         if rsi > rsi_ob:
             exists = any(p["direction"]=="sell" and abs(float(p["entry"])-price) < atr_val for p in open_pos)
             if not exists:
-                tp = round(price - atr_val, 5)
-                sl = round(price + atr_val*3, 5)
+                tp = round(price - atr_val*2, 5)
+                sl = round(price + atr_val*1.5, 5)
                 self.sb_insert("signals", {
                     "direction": "sell", "entry": round(price,5), "tp": tp,
                     "sl": sl,
@@ -219,8 +219,8 @@ class MeanRevStrategy:
         if rsi < rsi_os:
             exists = any(p["direction"]=="buy" and abs(float(p["entry"])-price) < atr_val for p in open_pos)
             if not exists:
-                tp = round(price + atr_val, 5)
-                sl = round(price - atr_val*3, 5)
+                tp = round(price + atr_val*2, 5)
+                sl = round(price - atr_val*1.5, 5)
                 self.sb_insert("signals", {
                     "direction": "buy", "entry": round(price,5), "tp": tp,
                     "sl": sl,
