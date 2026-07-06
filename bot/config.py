@@ -25,7 +25,7 @@ INSTRUMENTS = {
         "interval":     "15min",
         "rsi_ob":     60,
         "rsi_os":     40,
-        "enabled":      True,
+        "enabled":      False,
     },
     "AUDNZD": {
         "strategy":     "meanrev",
@@ -37,7 +37,7 @@ INSTRUMENTS = {
         "interval":     "15min",
         "rsi_ob":     60,
         "rsi_os":     40,
-        "enabled":      True,
+        "enabled":      False,
     },
     "EURGBP": {
         "strategy":     "meanrev",
@@ -49,7 +49,7 @@ INSTRUMENTS = {
         "interval":     "15min",
         "rsi_ob":     60,
         "rsi_os":     40,
-        "enabled":      True,
+        "enabled":      False,
     },
     "EURCHF": {
         "strategy":     "meanrev",
@@ -61,7 +61,7 @@ INSTRUMENTS = {
         "interval":     "15min",
         "rsi_ob":     72,
         "rsi_os":     28,
-        "enabled":      True,
+        "enabled":      False,
     },
     "NZDCAD": {
         "strategy":     "meanrev",
@@ -73,7 +73,7 @@ INSTRUMENTS = {
         "interval":     "1h",
         "rsi_ob":     60,
         "rsi_os":     40,
-        "enabled":      True,
+        "enabled":      False,
     },
     "EURAUD": {
         "strategy":     "meanrev",
@@ -85,7 +85,7 @@ INSTRUMENTS = {
         "interval":     "15min",
         "rsi_ob":     68,
         "rsi_os":     32,
-        "enabled":      True,
+        "enabled":      False,
     },
     "GBPCAD": {
         "strategy":     "meanrev",
@@ -97,7 +97,7 @@ INSTRUMENTS = {
         "interval":     "15min",
         "rsi_ob":     60,
         "rsi_os":     40,
-        "enabled":      True,
+        "enabled":      False,
     },
     "CADCHF": {
         "strategy":     "meanrev",
@@ -109,7 +109,7 @@ INSTRUMENTS = {
         "interval":     "15min",
         "rsi_ob":     60,
         "rsi_os":     40,
-        "enabled":      True,
+        "enabled":      False,
     },
     "EURNZD": {
         "strategy":     "meanrev",
@@ -121,7 +121,7 @@ INSTRUMENTS = {
         "interval":     "15min",
         "rsi_ob":       60,
         "rsi_os":       40,
-        "enabled":      True,
+        "enabled":      False,
     },
     "GBPNZD": {
         "strategy":     "meanrev",
@@ -133,7 +133,7 @@ INSTRUMENTS = {
         "interval":     "15min",
         "rsi_ob":       60,
         "rsi_os":       40,
-        "enabled":      True,
+        "enabled":      False,
     },
 }
 

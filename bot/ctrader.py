@@ -4,7 +4,7 @@ Päris ühendus ICMarkets cTrader kontoga
 Kasutab Spotware ametlikku ctrader-open-api teeki
 Annab reaalajas hinnad + saadab päris ordereid
 """
-import os, time, logging, threading
+import os, time, logging, threading, requests
 from datetime import datetime, timezone
 
 logger = logging.getLogger("NEMSIS_CTRADER")
@@ -38,6 +38,7 @@ _candles         = {}       # symbol_interval → DataFrame
 _symbol_ids      = {}       # symbolName → symbolId
 _symbol_lot_sizes = {}      # symbolName → lotSize
 _lock            = threading.Lock()
+_disconnect_times = []      # ühenduskatkestuste ajatemplid (viimase 60s throttling jaoks)
 
 def is_connected():
     return _connected and ACCESS_TOKEN != ""
@@ -132,6 +133,16 @@ def _run_client():
             global _connected
             _connected = False
             logger.warning(f"cTrader TCP ühendus katkes: {reason}")
+            # Reconnect-backoff: kui katkestusi tuleb liiga tihti (klaster),
+            # oota enne järgmist katset, et vältida serveri ülekoormamist
+            now_t = time.time()
+            _disconnect_times.append(now_t)
+            while _disconnect_times and now_t - _disconnect_times[0] > 60:
+                _disconnect_times.pop(0)
+            if len(_disconnect_times) >= 4:
+                wait_s = min(30, 3 * len(_disconnect_times))
+                logger.warning(f"⏳ {len(_disconnect_times)} katkestust 60s jooksul — ootan {wait_s}s enne jätkamist")
+                time.sleep(wait_s)
 
         def on_message(client, message):
             global _connected
@@ -282,11 +293,55 @@ def _run_client():
         logger.error(f"cTrader client viga: {e}")
         _connected = False
 
+def refresh_access_token():
+    """
+    Uuenda access token refresh tokeni abil.
+    Käivitatakse automaatselt iga 25 päeva tagant.
+    """
+    global ACCESS_TOKEN, REFRESH_TOKEN
+    if not REFRESH_TOKEN or not CLIENT_ID or not CLIENT_SECRET:
+        logger.warning("Token refresh: puuduvad credentials")
+        return False
+    try:
+        r = requests.get(
+            "https://openapi.ctrader.com/apps/token",
+            params={
+                "grant_type": "refresh_token",
+                "refresh_token": REFRESH_TOKEN,
+                "client_id": CLIENT_ID,
+                "client_secret": CLIENT_SECRET,
+            },
+            timeout=15
+        )
+        data = r.json()
+        if data.get("accessToken"):
+            ACCESS_TOKEN = data["accessToken"]
+            REFRESH_TOKEN = data.get("refreshToken", REFRESH_TOKEN)
+            logger.info("✅ cTrader token uuendatud edukalt")
+            return True
+        else:
+            logger.error(f"Token refresh ebaõnnestus: {data}")
+            return False
+    except Exception as e:
+        logger.error(f"Token refresh viga: {e}")
+        return False
+
+def _token_refresh_loop():
+    """Uuenda token iga 25 päeva tagant (token kehtib 30 päeva)."""
+    while True:
+        time.sleep(25 * 24 * 60 * 60)  # 25 päeva
+        logger.info("🔄 Token refresh alustab...")
+        refresh_access_token()
+
 def start():
     """Käivita cTrader WebSocket eraldi threadis."""
     if not ACCESS_TOKEN:
         logger.warning("cTrader: ACCESS_TOKEN puudub Railway Variables-ist")
         return
+
+    # Käivita token refresh thread
+    refresh_thread = threading.Thread(target=_token_refresh_loop, daemon=True, name="TokenRefresh")
+    refresh_thread.start()
 
     thread = threading.Thread(target=_run_client, daemon=True, name="cTrader")
     thread.start()
@@ -308,7 +363,8 @@ def place_order(direction, symbol_name, lot, tp=None, sl=None):
     direction: "buy" või "sell"
     symbol_name: "XAUUSD" vm
     lot: 0.01 vm
-    Tagastab order_id kui õnnestus, None kui ebaõnnestus.
+    Tagastab True kui broker kinnitas tehingu, False kui broker lükkas tagasi
+    (nt TRADING_NOT_ALLOWED), None kui pole ühendust või kinnitust ei tulnud.
     """
     if not _connected or not _client:
         logger.warning(f"⚠️ cTrader place_order: ei ole ühendust ({symbol_name})")
@@ -342,20 +398,44 @@ def place_order(direction, symbol_name, lot, tp=None, sl=None):
         if sl:
             req.stopLoss = int(round(sl * 100000))
 
-        deferred = _client.send(req)
-        
+        # Order-kinnituse ootamine: blokeerib kuni cTrader vastab (max 8 sek),
+        # et signaal salvestataks Supabase'i alles PÄRAST kinnitust
+        confirm_event = threading.Event()
+        result_holder = {"success": None}
+
         def on_order_response(result):
-            logger.info(f"cTrader order response: {result}")
+            try:
+                # payloadType 2132 = ORDER_ERROR_EVENT (nt TRADING_NOT_ALLOWED)
+                if getattr(result, "payloadType", None) == 2132:
+                    result_holder["success"] = False
+                else:
+                    result_holder["success"] = True
+            except Exception:
+                result_holder["success"] = False
+            confirm_event.set()
             return result
-        
+
         def on_order_error(failure):
             logger.error(f"cTrader order failed: {failure}")
+            result_holder["success"] = False
+            confirm_event.set()
             return failure
-        
+
+        deferred = _client.send(req)
         deferred.addCallback(on_order_response)
         deferred.addErrback(on_order_error)
-        logger.info(f"✅ cTrader ORDER: {direction.upper()} {ct_sym} {lot}lot | TP:{tp} SL:{sl}")
-        return deferred
+
+        confirmed = confirm_event.wait(timeout=8)
+        if not confirmed:
+            logger.warning(f"⚠️ cTrader order timeout — kinnitust ei tulnud 8s jooksul ({ct_sym})")
+            return None
+
+        if result_holder["success"]:
+            logger.info(f"✅ cTrader ORDER kinnitatud: {direction.upper()} {ct_sym} {lot}lot | TP:{tp} SL:{sl}")
+            return True
+        else:
+            logger.warning(f"❌ cTrader ORDER tagasi lükatud: {direction.upper()} {ct_sym} {lot}lot")
+            return False
 
     except Exception as e:
         logger.error(f"cTrader place_order {symbol_name}: {e}")
