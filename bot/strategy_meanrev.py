@@ -167,6 +167,27 @@ class MeanRevStrategy:
                     f"PnL: <b>+{pnl:.2f}€</b> | Balance: <b>{balance:.2f}€</b>"
                 )
 
+        # SL kontroll (individuaalne, positsiooni tasemel — varem puudus)
+        open_pos = self.get_open_positions()
+        for pos in open_pos:
+            entry     = float(pos["entry"])
+            sl        = float(pos["sl"])
+            direction = pos["direction"]
+            sl_hit = (low <= sl) if direction == "buy" else (high >= sl)
+            if sl_hit:
+                atr_val  = np.mean([abs(self.highs[i]-self.lows[i]) for i in range(-14,0)]) if len(self.highs) >= 14 else 0.001
+                pnl      = -(atr_val * self.cfg["lot"] * self.cfg["pip_value"])
+                new_bal  = round(balance + pnl, 2)
+                self.sb_upsert("signals", {"id": pos["id"], "executed": True})
+                self.sb_upsert("bot_state", {"id": 1, "balance": new_bal})
+                balance  = new_bal
+                self.add_log(f"🛑 {self.symbol} SL: {direction.upper()} @ {entry:.5f} → {sl:.5f}  {pnl:.2f}€")
+                self.send_telegram(
+                    f"🛑 <b>{self.symbol} SL</b>\n"
+                    f"{direction.upper()} @ {entry:.5f} → {sl:.5f}\n"
+                    f"PnL: <b>{pnl:.2f}€</b> | Balance: <b>{balance:.2f}€</b>"
+                )
+
         # Sessioon filter
         session = self.cfg.get("session", "all")
         if session == "asia" and not is_asian_session(now):
@@ -200,20 +221,24 @@ class MeanRevStrategy:
             if not exists:
                 tp = round(price - atr_val*2, 5)
                 sl = round(price + atr_val*1.5, 5)
-                self.sb_insert("signals", {
-                    "direction": "sell", "entry": round(price,5), "tp": tp,
-                    "sl": sl,
-                    "lot": lot, "session": self.symbol,
-                    "regime": "meanrev", "executed": False, "breakeven": False,
-                    "atr": round(atr_val, 6), "score": int(rsi),
-                })
-                # Päris cTrader order
+                # Päris cTrader order — salvesta signaal AINULT kui broker kinnitab
+                order_ok = False
                 try:
                     import ctrader as ct
-                    ct.place_order("sell", self.symbol, lot, tp=tp, sl=sl)
+                    order_ok = ct.place_order("sell", self.symbol, lot, tp=tp, sl=sl)
                 except Exception as e:
                     self.logger.error(f"cTrader order {self.symbol}: {e}")
-                self.add_log(f"📊 {self.symbol} SELL @ {price:.5f} | RSI:{rsi:.0f} | BB upper")
+                if order_ok:
+                    self.sb_insert("signals", {
+                        "direction": "sell", "entry": round(price,5), "tp": tp,
+                        "sl": sl,
+                        "lot": lot, "session": self.symbol,
+                        "regime": "meanrev", "executed": False, "breakeven": False,
+                        "atr": round(atr_val, 6), "score": int(rsi),
+                    })
+                    self.add_log(f"📊 {self.symbol} SELL @ {price:.5f} | RSI:{rsi:.0f} | BB upper")
+                else:
+                    self.add_log(f"⏭️ {self.symbol} SELL ignoreeritud — order ei kinnitunud")
 
         # BUY — RSI oversold (Bollinger eemaldatud)
         if rsi < rsi_os:
@@ -221,17 +246,21 @@ class MeanRevStrategy:
             if not exists:
                 tp = round(price + atr_val*2, 5)
                 sl = round(price - atr_val*1.5, 5)
-                self.sb_insert("signals", {
-                    "direction": "buy", "entry": round(price,5), "tp": tp,
-                    "sl": sl,
-                    "lot": lot, "session": self.symbol,
-                    "regime": "meanrev", "executed": False, "breakeven": False,
-                    "atr": round(atr_val, 6), "score": int(rsi),
-                })
-                # Päris cTrader order
+                # Päris cTrader order — salvesta signaal AINULT kui broker kinnitab
+                order_ok = False
                 try:
                     import ctrader as ct
-                    ct.place_order("buy", self.symbol, lot, tp=tp, sl=sl)
+                    order_ok = ct.place_order("buy", self.symbol, lot, tp=tp, sl=sl)
                 except Exception as e:
                     self.logger.error(f"cTrader order {self.symbol}: {e}")
-                self.add_log(f"📊 {self.symbol} BUY @ {price:.5f} | RSI:{rsi:.0f} | BB lower")
+                if order_ok:
+                    self.sb_insert("signals", {
+                        "direction": "buy", "entry": round(price,5), "tp": tp,
+                        "sl": sl,
+                        "lot": lot, "session": self.symbol,
+                        "regime": "meanrev", "executed": False, "breakeven": False,
+                        "atr": round(atr_val, 6), "score": int(rsi),
+                    })
+                    self.add_log(f"📊 {self.symbol} BUY @ {price:.5f} | RSI:{rsi:.0f} | BB lower")
+                else:
+                    self.add_log(f"⏭️ {self.symbol} BUY ignoreeritud — order ei kinnitunud")
