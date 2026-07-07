@@ -217,11 +217,8 @@ def get_scalp_data():
     if now - _scalp_cache["updated"] < 300 and _scalp_cache["df"] is not None:
         return _scalp_cache["df"]
     try:
-        import yfinance as yf
-        df = yf.Ticker("GC=F").history(interval="5m", period="1d", auto_adjust=True)
+        df = ct.get_candles("XAU/USD", interval="5m", count=288)
         if df is None or df.empty: return _scalp_cache["df"]
-        df.columns = [c.lower() for c in df.columns]
-        df.index = pd.to_datetime(df.index, utc=True)
         _scalp_cache = {"df": df, "updated": now}
         return df
     except Exception as e:
@@ -397,7 +394,6 @@ def run_gold_grid(price, high, low, now):
     for pos in open_pos:
         entry = float(pos.get("entry",0))
         tp    = float(pos.get("tp",0))
-        sl    = float(pos.get("sl",0))
         d     = pos.get("direction","buy")
         pid   = pos.get("id")
         lot   = get_compound_lot(balance)
@@ -414,16 +410,6 @@ def run_gold_grid(price, high, low, now):
                 pending[str(tp)] = opp
                 grid_state["pending"] = pending
                 save_grid_state(grid_state)
-            continue
-
-        # SL kontroll (individuaalne, positsiooni tasemel — varem puudus)
-        if sl > 0 and (low<=sl if d=="buy" else high>=sl):
-            pnl     = -(gs*lot*100*3)  # SL on 3× grid-sammu kaugusel (vt insert: sl = level ± gs*3)
-            balance = round(balance+pnl, 2)
-            sb_upsert("signals", {"id":pid,"executed":True})
-            sb_upsert("bot_state", {"id":1,"balance":balance})
-            add_log(f"🛑 Gold SL: {d.upper()} @ {entry:.0f}→{sl:.0f}  {pnl:.2f}€")
-            send_telegram(f"🛑 <b>Gold SL</b>\n{d.upper()} @ {entry:.0f}→{sl:.0f}\n{pnl:.2f}€ | {balance:.2f}€")
             continue
 
         fl = (price-entry)*lot*100 if d=="buy" else (entry-price)*lot*100
@@ -445,20 +431,17 @@ def run_gold_grid(price, high, low, now):
         lot = get_compound_lot(balance)
         tp  = round(level+gs if direction=="buy" else level-gs, 2)
         sl  = round(level-gs*3 if direction=="buy" else level+gs*3, 2)
-        # Saada päris order cTrader kontole — salvesta signaal AINULT kui broker kinnitab
-        order_ok = ct.place_order(direction, "XAUUSD", lot, tp=tp, sl=sl)
-        if order_ok:
-            sb_insert("signals", {
-                "direction":direction,"entry":level,"tp":tp,
-                "sl":sl,
-                "lot":lot,"regime":"grid","session":f"gold_{effective_trend}",
-                "executed":False,"breakeven":False,"atr":gs,"score":0,"rr":3.0,
-            })
-            triggered.append(level_str)
-            add_log(f"📊 Gold order: {direction.upper()} @ {level:.0f}  TP:{tp:.0f}")
-            send_telegram(f"📊 <b>Gold Grid Order</b>\n{direction.upper()} @ <b>{level:.0f}</b>\nTP: <b>{tp:.0f}</b> | {effective_trend}")
-        else:
-            add_log(f"⏭️ Gold order ignoreeritud — kinnitust ei tulnud @ {level:.0f}")
+        sb_insert("signals", {
+            "direction":direction,"entry":level,"tp":tp,
+            "sl":sl,
+            "lot":lot,"regime":"grid","session":f"gold_{effective_trend}",
+            "executed":False,"breakeven":False,"atr":gs,"score":0,"rr":3.0,
+        })
+        # Saada päris order cTrader kontole
+        ct.place_order(direction, "XAUUSD", lot, tp=tp, sl=sl)
+        triggered.append(level_str)
+        add_log(f"📊 Gold order: {direction.upper()} @ {level:.0f}  TP:{tp:.0f}")
+        send_telegram(f"📊 <b>Gold Grid Order</b>\n{direction.upper()} @ <b>{level:.0f}</b>\nTP: <b>{tp:.0f}</b> | {effective_trend}")
 
     for ls in triggered:
         if ls in pending: del pending[ls]
@@ -484,28 +467,26 @@ def run_gold_grid(price, high, low, now):
                     if effective_trend == "bull" and l5 < price - 5:
                         tp_scalp = round(l5 + 10, 2)
                         sl_scalp = round(l5 - 15, 2)
-                        order_ok = ct.place_order("buy", "XAUUSD", lot_scalp, tp=tp_scalp, sl=sl_scalp)
-                        if order_ok:
-                            sb_insert("signals", {
-                                "direction":"buy","entry":round(l5,2),"tp":tp_scalp,
-                                "sl":sl_scalp,"lot":lot_scalp,"regime":"grid",
-                                "session":"scalp_bull","executed":False,"breakeven":False,
-                                "atr":range5,"score":1,"rr":0.67,
-                            })
-                            add_log(f"⚡ Scalp BUY @ {l5:.0f} TP:{tp_scalp:.0f}")
+                        sb_insert("signals", {
+                            "direction":"buy","entry":round(l5,2),"tp":tp_scalp,
+                            "sl":sl_scalp,"lot":lot_scalp,"regime":"grid",
+                            "session":"scalp_bull","executed":False,"breakeven":False,
+                            "atr":range5,"score":1,"rr":0.67,
+                        })
+                        ct.place_order("buy", "XAUUSD", lot_scalp, tp=tp_scalp, sl=sl_scalp)
+                        add_log(f"⚡ Scalp BUY @ {l5:.0f} TP:{tp_scalp:.0f}")
 
                     elif effective_trend == "bear" and h5 > price + 5:
                         tp_scalp = round(h5 - 10, 2)
                         sl_scalp = round(h5 + 15, 2)
-                        order_ok = ct.place_order("sell", "XAUUSD", lot_scalp, tp=tp_scalp, sl=sl_scalp)
-                        if order_ok:
-                            sb_insert("signals", {
-                                "direction":"sell","entry":round(h5,2),"tp":tp_scalp,
-                                "sl":sl_scalp,"lot":lot_scalp,"regime":"grid",
-                                "session":"scalp_bear","executed":False,"breakeven":False,
-                                "atr":range5,"score":1,"rr":0.67,
-                            })
-                            add_log(f"⚡ Scalp SELL @ {h5:.0f} TP:{tp_scalp:.0f}")
+                        sb_insert("signals", {
+                            "direction":"sell","entry":round(h5,2),"tp":tp_scalp,
+                            "sl":sl_scalp,"lot":lot_scalp,"regime":"grid",
+                            "session":"scalp_bear","executed":False,"breakeven":False,
+                            "atr":range5,"score":1,"rr":0.67,
+                        })
+                        ct.place_order("sell", "XAUUSD", lot_scalp, tp=tp_scalp, sl=sl_scalp)
+                        add_log(f"⚡ Scalp SELL @ {h5:.0f} TP:{tp_scalp:.0f}")
     except Exception as e:
         logger.error(f"Scalp error: {e}")
 
