@@ -88,6 +88,9 @@ def send_telegram(text):
         logger.warning(f"Telegram: {e}")
 
 def get_balance():
+    mt5_balance = ct.get_account_balance()
+    if mt5_balance and mt5_balance > 0:
+        return float(mt5_balance)
     rows = sb_select("bot_state", "id=eq.1&select=balance")
     if rows and rows[0].get("balance"):
         return float(rows[0]["balance"])
