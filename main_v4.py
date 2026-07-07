@@ -13,7 +13,7 @@ import numpy as np
 
 from config import INSTRUMENTS, MEANREV_CONFIG, GRID_CONFIG
 from strategy_meanrev import MeanRevStrategy
-import ctrader as ct
+import mt5_connector as ct
 
 # ── Env vars ─────────────────────────────────────────────
 SUPABASE_URL     = os.environ.get("SUPABASE_URL", "")
@@ -88,6 +88,9 @@ def send_telegram(text):
         logger.warning(f"Telegram: {e}")
 
 def get_balance():
+    mt5_balance = ct.get_account_balance()
+    if mt5_balance and mt5_balance > 0:
+        return float(mt5_balance)
     rows = sb_select("bot_state", "id=eq.1&select=balance")
     if rows and rows[0].get("balance"):
         return float(rows[0]["balance"])
@@ -116,9 +119,12 @@ def save_circuit_state(state):
 
 def check_circuit_breaker(balance, now):
     """
-    Kontrolli circuit breaker tingimusi.
+    Kontrolli circuit breaker tingimusi EQUITY põhjal (mitte balance).
+    Equity = balance + lahtiste positsioonide floating P&L.
     Tagastab True kui kauplema võib, False kui peab pausima.
     """
+    # Kasuta equity-t — see näitab tegelikku drawdown-i reaalajas
+    equity = get_account_equity()
     circuit = get_circuit_state()
     today = now.strftime("%Y-%m-%d")
     week  = now.strftime("%Y-W%W")
@@ -156,20 +162,20 @@ def check_circuit_breaker(balance, now):
     week_start = float(circuit.get("week_start_balance", balance))
     day_start  = float(circuit.get("day_start_balance", balance))
 
-    # Nädalane drawdown > 15% → paus ülejäänud nädalaks
-    if week_start > 0 and (week_start - balance) / week_start > 0.15:
+    # Nädalane drawdown > 15% EQUITY järgi → paus ülejäänud nädalaks
+    if week_start > 0 and (week_start - equity) / week_start > 0.15:
         circuit["paused_until_week"] = week
         save_circuit_state(circuit)
-        msg = f"🛑 CIRCUIT BREAKER: -15% nädalas ({week_start:.2f}€ → {balance:.2f}€) — paus kuni nädala lõpuni!"
+        msg = f"🛑 CIRCUIT BREAKER: equity -15% nädalas ({week_start:.2f}€ → equity {equity:.2f}€) — paus kuni nädala lõpuni!"
         add_log(msg)
         send_telegram(f"🛑 <b>CIRCUIT BREAKER AKTIVEERITUD</b>\n{msg}")
         return False
 
-    # Päevane drawdown > 10% → paus ülejäänud päevaks
-    if day_start > 0 and (day_start - balance) / day_start > 0.10:
+    # Päevane drawdown > 10% EQUITY järgi → paus ülejäänud päevaks
+    if day_start > 0 and (day_start - equity) / day_start > 0.10:
         circuit["paused_until_day"] = today
         save_circuit_state(circuit)
-        msg = f"⏸ Circuit breaker: -10% päevas ({day_start:.2f}€ → {balance:.2f}€) — paus tänaseks"
+        msg = f"⏸ Circuit breaker: equity -10% päevas ({day_start:.2f}€ → equity {equity:.2f}€) — paus tänaseks"
         add_log(msg)
         send_telegram(f"⏸ <b>Päevane paus</b>\n{msg}")
         return False
@@ -217,11 +223,8 @@ def get_scalp_data():
     if now - _scalp_cache["updated"] < 300 and _scalp_cache["df"] is not None:
         return _scalp_cache["df"]
     try:
-        import yfinance as yf
-        df = yf.Ticker("GC=F").history(interval="5m", period="1d", auto_adjust=True)
+        df = ct.get_candles("XAU/USD", interval="5m", count=288)
         if df is None or df.empty: return _scalp_cache["df"]
-        df.columns = [c.lower() for c in df.columns]
-        df.index = pd.to_datetime(df.index, utc=True)
         _scalp_cache = {"df": df, "updated": now}
         return df
     except Exception as e:
@@ -342,6 +345,49 @@ Vasta AINULT JSON: {{"bias":"buy/sell/neutral","confidence":0-100,"reason":"eest
         logger.error(f"Claude: {e}")
         return "neutral", ""
 
+
+# ─────────────────────────────────────────────────────────
+#  MT5 POSITSIOONIDE SÜNKRONISEERIMINE
+# ─────────────────────────────────────────────────────────
+
+def sync_mt5_positions():
+    """
+    Sünkroniseeri MT5 päris positsioonid Supabase signals-tabeliga.
+    Kui MT5-s on positsioon suletud (TP/SL tabas), märgi Supabase-s executed=True.
+    Tagastab MT5-s lahti olevate ticketite seti.
+    """
+    try:
+        mt5_open = ct.get_open_positions()
+        mt5_tickets = {p["ticket"] for p in mt5_open}
+
+        # Loe Supabase-st kõik lahti positsioonid (executed=False)
+        sb_open = sb_select("signals", "executed=eq.false&regime=eq.grid")
+        if not sb_open:
+            return mt5_tickets
+
+        for pos in sb_open:
+            ticket = pos.get("mt5_ticket")
+            if ticket is None:
+                continue  # vanad positsioonid ilma ticketita — jäta rahule
+            if int(ticket) not in mt5_tickets:
+                # MT5-s suletud aga Supabase-s lahti — märgi suletuks
+                sb_upsert("signals", {"id": pos["id"], "executed": True})
+                add_log(f"🔄 Sync: positsioon {ticket} suletud MT5 poolt → Supabase uuendatud")
+
+        return mt5_tickets
+    except Exception as e:
+        logger.error(f"sync_mt5_positions viga: {e}")
+        return set()
+
+
+def get_account_equity():
+    """Tagasta MT5 equity (balance + lahtiste positsioonide floating P&L)."""
+    equity = ct.get_account_equity()
+    if equity and equity > 0:
+        return float(equity)
+    # Fallback: balance (halvem aga parem kui 0)
+    return get_balance()
+
 def run_gold_grid(price, high, low, now):
     cfg    = INSTRUMENTS["XAUUSD"]
     gs     = cfg["grid_size"]
@@ -417,6 +463,12 @@ def run_gold_grid(price, high, low, now):
 
         fl = (price-entry)*lot*100 if d=="buy" else (entry-price)*lot*100
         if fl < -get_scaled_max_float(balance):
+            # Sulge PÄRIS MT5 positsioon
+            ticket = pos.get("mt5_ticket")
+            if ticket:
+                closed = ct.close_position(int(ticket))
+                if not closed:
+                    add_log(f"⚠️ Float stop: MT5 positsioon {ticket} sulgemine ebaõnnestus!")
             balance = round(balance+fl, 2)
             sb_upsert("signals", {"id":pid,"executed":True})
             sb_upsert("bot_state", {"id":1,"balance":balance})
@@ -434,16 +486,21 @@ def run_gold_grid(price, high, low, now):
         lot = get_compound_lot(balance)
         tp  = round(level+gs if direction=="buy" else level-gs, 2)
         sl  = round(level-gs*3 if direction=="buy" else level+gs*3, 2)
+        # Saada KÕIGEPEALT päris order MT5-sse, kontrolli tulemust
+        order_result = ct.place_order(direction, "XAUUSD", lot, tp=tp, sl=sl)
+        if "error" in order_result:
+            add_log(f"❌ Gold order ebaõnnestus: {order_result['error']}")
+            continue
+        # Alles pärast edukat orderit salvesta Supabase-sse
         sb_insert("signals", {
             "direction":direction,"entry":level,"tp":tp,
             "sl":sl,
             "lot":lot,"regime":"grid","session":f"gold_{effective_trend}",
             "executed":False,"breakeven":False,"atr":gs,"score":0,"rr":3.0,
+            "mt5_ticket": order_result.get("orderId"),
         })
-        # Saada päris order cTrader kontole
-        ct.place_order(direction, "XAUUSD", lot, tp=tp, sl=sl)
         triggered.append(level_str)
-        add_log(f"📊 Gold order: {direction.upper()} @ {level:.0f}  TP:{tp:.0f}")
+        add_log(f"📊 Gold order: {direction.upper()} @ {level:.0f}  TP:{tp:.0f} (ticket:{order_result.get('orderId')})")
         send_telegram(f"📊 <b>Gold Grid Order</b>\n{direction.upper()} @ <b>{level:.0f}</b>\nTP: <b>{tp:.0f}</b> | {effective_trend}")
 
     for ls in triggered:
@@ -470,26 +527,34 @@ def run_gold_grid(price, high, low, now):
                     if effective_trend == "bull" and l5 < price - 5:
                         tp_scalp = round(l5 + 10, 2)
                         sl_scalp = round(l5 - 15, 2)
-                        sb_insert("signals", {
-                            "direction":"buy","entry":round(l5,2),"tp":tp_scalp,
-                            "sl":sl_scalp,"lot":lot_scalp,"regime":"grid",
-                            "session":"scalp_bull","executed":False,"breakeven":False,
-                            "atr":range5,"score":1,"rr":0.67,
-                        })
-                        ct.place_order("buy", "XAUUSD", lot_scalp, tp=tp_scalp, sl=sl_scalp)
-                        add_log(f"⚡ Scalp BUY @ {l5:.0f} TP:{tp_scalp:.0f}")
+                        scalp_result = ct.place_order("buy", "XAUUSD", lot_scalp, tp=tp_scalp, sl=sl_scalp)
+                        if "error" not in scalp_result:
+                            sb_insert("signals", {
+                                "direction":"buy","entry":round(l5,2),"tp":tp_scalp,
+                                "sl":sl_scalp,"lot":lot_scalp,"regime":"grid",
+                                "session":"scalp_bull","executed":False,"breakeven":False,
+                                "atr":range5,"score":1,"rr":0.67,
+                                "mt5_ticket": scalp_result.get("orderId"),
+                            })
+                            add_log(f"⚡ Scalp BUY @ {l5:.0f} TP:{tp_scalp:.0f}")
+                        else:
+                            add_log(f"❌ Scalp BUY ebaõnnestus: {scalp_result['error']}")
 
                     elif effective_trend == "bear" and h5 > price + 5:
                         tp_scalp = round(h5 - 10, 2)
                         sl_scalp = round(h5 + 15, 2)
-                        sb_insert("signals", {
-                            "direction":"sell","entry":round(h5,2),"tp":tp_scalp,
-                            "sl":sl_scalp,"lot":lot_scalp,"regime":"grid",
-                            "session":"scalp_bear","executed":False,"breakeven":False,
-                            "atr":range5,"score":1,"rr":0.67,
-                        })
-                        ct.place_order("sell", "XAUUSD", lot_scalp, tp=tp_scalp, sl=sl_scalp)
-                        add_log(f"⚡ Scalp SELL @ {h5:.0f} TP:{tp_scalp:.0f}")
+                        scalp_result = ct.place_order("sell", "XAUUSD", lot_scalp, tp=tp_scalp, sl=sl_scalp)
+                        if "error" not in scalp_result:
+                            sb_insert("signals", {
+                                "direction":"sell","entry":round(h5,2),"tp":tp_scalp,
+                                "sl":sl_scalp,"lot":lot_scalp,"regime":"grid",
+                                "session":"scalp_bear","executed":False,"breakeven":False,
+                                "atr":range5,"score":1,"rr":0.67,
+                                "mt5_ticket": scalp_result.get("orderId"),
+                            })
+                            add_log(f"⚡ Scalp SELL @ {h5:.0f} TP:{tp_scalp:.0f}")
+                        else:
+                            add_log(f"❌ Scalp SELL ebaõnnestus: {scalp_result['error']}")
     except Exception as e:
         logger.error(f"Scalp error: {e}")
 
@@ -534,16 +599,12 @@ def main():
     balance = get_balance()
     add_log(f"💼 Balance: {balance:.2f}€")
 
-    # cTrader WebSocket käivitamine
-    if ct.ACCESS_TOKEN:
-        add_log("🔌 cTrader WebSocket käivitub...")
-        ct.start()
-        if ct.is_connected():
-            add_log("🔗 cTrader: ÜHENDATUD — reaalajas hinnad aktiivsed")
-        else:
-            add_log("⚠️ cTrader: ühendus pooleli — yfinance fallback aktiivselt")
+    # MT5 käivitamine
+    ct.start()
+    if ct.is_connected():
+        add_log("🔗 MT5: ÜHENDATUD")
     else:
-        add_log("⚠️ cTrader: ACCESS_TOKEN puudub Railway Variables-ist")
+        add_log("⚠️ MT5: ühendus ebaõnnestus — kontrolli VPS-i")
 
     send_telegram(
         f"🚀 <b>NEMSIS v4 käivitus!</b>\n"
@@ -584,6 +645,9 @@ def main():
             if not check_circuit_breaker(balance, now):
                 time.sleep(SCAN_INTERVAL)
                 continue
+
+            # ── MT5 POSITSIOONIDE SÜNKRONISEERIMINE ──
+            sync_mt5_positions()
 
             # ── GOLD GRID ──
             price_gold = 0
