@@ -326,8 +326,21 @@ def get_claude_bias(price, trend, atr, session):
     if not ANTHROPIC_KEY:
         return "neutral", ""
     try:
-        prompt = f"""Oled gold trader. Analüüsi lühidalt:
-Gold: ${price:.0f} | Trend: {trend} | ATR: ${atr:.1f} | Sessioon: {session}
+        # Arvuta hinna liikumine viimasest cache'ist
+        last_price = _claude_cache.get("last_price", price)
+        price_change = price - last_price
+        price_change_pct = (price_change / last_price * 100) if last_price > 0 else 0
+        prompt = f"""Oled kulla (XAUUSD) trader. Analüüsi ja anna bias:
+Gold hind: ${price:.0f} | Muutus: {price_change:+.1f}$ ({price_change_pct:+.2f}%)
+Tehniline trend: {trend} | ATR: ${atr:.1f} | Sessioon: {session}
+
+Reeglid:
+- Kui hind langeb >$15 viimase perioodiga võrreldes → bias=sell
+- Kui hind tõuseb >$15 viimase perioodiga võrreldes → bias=buy  
+- ATR>${atr:.0f} tähendab kõrget volatiilsust → trading sobib
+- Sessiooni tüüp EI ole piisav põhjus neutral ütlemiseks kui hind liigub
+- avoid=true ainult kui spread on ebanormaalselt suur või uudised ootavad
+
 Vasta AINULT JSON: {{"bias":"buy/sell/neutral","confidence":0-100,"reason":"eesti keeles lühidalt","avoid":true/false}}"""
         r = requests.post("https://api.anthropic.com/v1/messages",
             headers={"x-api-key":ANTHROPIC_KEY,"anthropic-version":"2023-06-01","content-type":"application/json"},
@@ -337,7 +350,7 @@ Vasta AINULT JSON: {{"bias":"buy/sell/neutral","confidence":0-100,"reason":"eest
         res  = json.loads(text)
         bias = "neutral" if res.get("avoid") else res.get("bias","neutral")
         reason = res.get("reason","")
-        _claude_cache = {"bias":bias,"reason":reason,"updated":now}
+        _claude_cache = {"bias":bias,"reason":reason,"updated":now,"last_price":price}
         add_log(f"🤖 Claude: {bias} — {reason[:40]}")
         send_telegram(f"🤖 <b>Claude AI</b>\nBias: <b>{bias.upper()}</b>\n{reason}")
         return bias, reason
