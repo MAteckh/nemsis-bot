@@ -326,21 +326,8 @@ def get_claude_bias(price, trend, atr, session):
     if not ANTHROPIC_KEY:
         return "neutral", ""
     try:
-        # Arvuta hinna liikumine viimasest cache'ist
-        last_price = _claude_cache.get("last_price", price)
-        price_change = price - last_price
-        price_change_pct = (price_change / last_price * 100) if last_price > 0 else 0
-        prompt = f"""Oled kulla (XAUUSD) trader. Analüüsi ja anna bias:
-Gold hind: ${price:.0f} | Muutus: {price_change:+.1f}$ ({price_change_pct:+.2f}%)
-Tehniline trend: {trend} | ATR: ${atr:.1f} | Sessioon: {session}
-
-Reeglid:
-- Kui hind langeb >$15 viimase perioodiga võrreldes → bias=sell
-- Kui hind tõuseb >$15 viimase perioodiga võrreldes → bias=buy  
-- ATR>${atr:.0f} tähendab kõrget volatiilsust → trading sobib
-- Sessiooni tüüp EI ole piisav põhjus neutral ütlemiseks kui hind liigub
-- avoid=true ainult kui spread on ebanormaalselt suur või uudised ootavad
-
+        prompt = f"""Oled gold trader. Analüüsi lühidalt:
+Gold: ${price:.0f} | Trend: {trend} | ATR: ${atr:.1f} | Sessioon: {session}
 Vasta AINULT JSON: {{"bias":"buy/sell/neutral","confidence":0-100,"reason":"eesti keeles lühidalt","avoid":true/false}}"""
         r = requests.post("https://api.anthropic.com/v1/messages",
             headers={"x-api-key":ANTHROPIC_KEY,"anthropic-version":"2023-06-01","content-type":"application/json"},
@@ -350,7 +337,7 @@ Vasta AINULT JSON: {{"bias":"buy/sell/neutral","confidence":0-100,"reason":"eest
         res  = json.loads(text)
         bias = "neutral" if res.get("avoid") else res.get("bias","neutral")
         reason = res.get("reason","")
-        _claude_cache = {"bias":bias,"reason":reason,"updated":now,"last_price":price}
+        _claude_cache = {"bias":bias,"reason":reason,"updated":now}
         add_log(f"🤖 Claude: {bias} — {reason[:40]}")
         send_telegram(f"🤖 <b>Claude AI</b>\nBias: <b>{bias.upper()}</b>\n{reason}")
         return bias, reason
@@ -400,6 +387,45 @@ def get_account_equity():
         return float(equity)
     # Fallback: balance (halvem aga parem kui 0)
     return get_balance()
+
+
+def get_swing_levels(df, lookback=20):
+    """
+    Tagasta viimase `lookback` küünla swing low ja swing high.
+    Kasutatakse SL-i paigutamiseks päris tugi/vastupanu taseme taha.
+    """
+    try:
+        if df is None or len(df) < lookback:
+            return None, None
+        recent = df.tail(lookback)
+        return float(recent["low"].min()), float(recent["high"].max())
+    except Exception:
+        return None, None
+
+
+def calc_gold_tp_sl(direction, level, atr, swing_low, swing_high):
+    """
+    ATR-põhine TP + swing-põhine SL.
+    TP = 2x ATR (min $30, max $100)
+    SL = swing tase + $10 puhver, max $80 kaugusel
+    """
+    tp_dist = max(30.0, min(100.0, 2.0 * atr))
+    sl_max  = 80.0
+    buf     = 10.0
+
+    if direction == "buy":
+        tp = round(level + tp_dist, 2)
+        if swing_low is not None and level - swing_low + buf <= sl_max and swing_low < level:
+            sl = round(swing_low - buf, 2)
+        else:
+            sl = round(level - sl_max, 2)
+    else:
+        tp = round(level - tp_dist, 2)
+        if swing_high is not None and swing_high - level + buf <= sl_max and swing_high > level:
+            sl = round(swing_high + buf, 2)
+        else:
+            sl = round(level + sl_max, 2)
+    return tp, sl
 
 def run_gold_grid(price, high, low, now):
     cfg    = INSTRUMENTS["XAUUSD"]
@@ -461,7 +487,7 @@ def run_gold_grid(price, high, low, now):
         lot   = get_compound_lot(balance)
 
         if (high>=tp if d=="buy" else low<=tp):
-            pnl     = gs*lot*100
+            pnl     = abs(tp-entry)*lot*100
             balance = round(balance+pnl, 2)
             sb_upsert("signals", {"id":pid,"executed":True})
             sb_upsert("bot_state", {"id":1,"balance":balance})
@@ -497,8 +523,9 @@ def run_gold_grid(price, high, low, now):
         same = [p for p in get_gold_positions() if p.get("direction")==direction]
         if len(same) >= gl: continue
         lot = get_compound_lot(balance)
-        tp  = round(level+gs if direction=="buy" else level-gs, 2)
-        sl  = round(level-gs*3 if direction=="buy" else level+gs*3, 2)
+        atr_now = _atr_history[-1] if _atr_history else 20.0
+        swing_low, swing_high = get_swing_levels(df)
+        tp, sl = calc_gold_tp_sl(direction, level, atr_now, swing_low, swing_high)
         # Saada KÕIGEPEALT päris order MT5-sse, kontrolli tulemust
         order_result = ct.place_order(direction, "XAUUSD", lot, tp=tp, sl=sl)
         if "error" in order_result:
