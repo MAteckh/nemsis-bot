@@ -702,13 +702,15 @@ def main():
                         # Gold grid ei vaja BB/RSI — ainult hind ja trend
                         # high/low: kasuta ±0.5% hinnast kui df puudub
                         df_gold = get_data("XAU/USD")
-                        if df_gold is not None and len(df_gold) > 1:
-                            high_gold = float(df_gold["high"].iloc[-1])
-                            low_gold  = float(df_gold["low"].iloc[-1])
+                        if df_gold is not None and len(df_gold) > 2:
+                            # Kasuta viimase 2 küünla high/low — katab ~2h liikumise
+                            # nii ei jää grid tabamised vahele 15min scannil
+                            high_gold = float(df_gold["high"].iloc[-2:].max())
+                            low_gold  = float(df_gold["low"].iloc[-2:].min())
                         else:
-                            # Fallback: kasuta ±0.3% hinnast
-                            high_gold = round(price_gold * 1.003, 2)
-                            low_gold  = round(price_gold * 0.997, 2)
+                            # Fallback: kasuta ±0.5% hinnast
+                            high_gold = round(price_gold * 1.005, 2)
+                            low_gold  = round(price_gold * 0.995, 2)
                         add_log(f"🥇 Gold: ${price_gold:.2f}")
                         run_gold_grid(price_gold, high_gold, low_gold, now)
                     else:
