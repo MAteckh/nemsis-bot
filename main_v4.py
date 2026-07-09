@@ -522,7 +522,7 @@ def run_gold_grid(price, high, low, now):
         same = [p for p in get_gold_positions() if p.get("direction")==direction]
         if len(same) >= gl: continue
         lot = get_compound_lot(balance)
-        tp = round(level + 25.0 if direction=="buy" else level - 25.0, 2)
+        tp = round(level + 20.0 if direction=="buy" else level - 20.0, 2)
         sl = None  # SL puudub üksikul positsioonil, float stop kaitseb
         # Saada KÕIGEPEALT päris order MT5-sse, kontrolli tulemust
         order_result = ct.place_order(direction, "XAUUSD", lot, tp=tp, sl=None)
