@@ -165,7 +165,7 @@ MEANREV_CONFIG = {
 # Grid parameetrid (kullale)
 GRID_CONFIG = {
     "levels":      8,
-    "max_float":   100.0,
+    "max_float":   80.0,
     "trend_period": 10,
     "vol_thresh":  1.3,
     "vol_boost":   1.5,
