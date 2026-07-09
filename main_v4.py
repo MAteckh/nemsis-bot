@@ -782,4 +782,10 @@ def main():
         time.sleep(SCAN_INTERVAL)
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        send_telegram("⏹ <b>NEMSIS peatatud</b>\nKasutaja peatas boti käsitsi.")
+    except Exception as e:
+        send_telegram(f"🚨 <b>NEMSIS CRASH</b>\nViga: {str(e)[:200]}\nBot on maas — palun taaskäivita!")
+        raise
