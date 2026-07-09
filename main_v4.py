@@ -444,9 +444,8 @@ def run_gold_grid(price, high, low, now):
     # Claude AI
     atr_val = _atr_history[-1] if _atr_history else 20.0
     session = "london" if 7 <= now.hour < 13 else "new_york" if 13 <= now.hour < 20 else "asia"
-    bias, _ = get_claude_bias(price, trend, atr_val, session)
-    effective_trend = "bull" if bias=="buy" and trend=="neutral" else \
-                      "bear" if bias=="sell" and trend=="neutral" else trend
+    bias = "neutral"  # Claude AI väljas — puhas tehniline trend
+    effective_trend = trend
 
     balance    = get_balance()
     grid_state = get_grid_state()
@@ -523,11 +522,10 @@ def run_gold_grid(price, high, low, now):
         same = [p for p in get_gold_positions() if p.get("direction")==direction]
         if len(same) >= gl: continue
         lot = get_compound_lot(balance)
-        atr_now = _atr_history[-1] if _atr_history else 20.0
-        swing_low, swing_high = get_swing_levels(df)
-        tp, sl = calc_gold_tp_sl(direction, level, atr_now, swing_low, swing_high)
+        tp = round(level + 25.0 if direction=="buy" else level - 25.0, 2)
+        sl = None  # SL puudub üksikul positsioonil, float stop kaitseb
         # Saada KÕIGEPEALT päris order MT5-sse, kontrolli tulemust
-        order_result = ct.place_order(direction, "XAUUSD", lot, tp=tp, sl=sl)
+        order_result = ct.place_order(direction, "XAUUSD", lot, tp=tp, sl=None)
         if "error" in order_result:
             add_log(f"❌ Gold order ebaõnnestus: {order_result['error']}")
             continue
