@@ -201,29 +201,55 @@ _cache = {}
 _scalp_cache = {"df": None, "updated": 0}
 
 def get_data(symbol_td, interval="1h", outputsize=100):
-    """Hangi ajaloolised andmed — cTrader esimesena, yfinance fallback."""
+    """Hangi ajaloolised andmed MT5-st — 30s timeout."""
     global _cache
     now = time.time()
     cache_key = f"{symbol_td}_{interval}"
     if cache_key in _cache and now - _cache[cache_key]["updated"] < 300:
         return _cache[cache_key]["df"]
-    
-    # cTrader candles (sisaldab yfinance fallback)
-    df = ct.get_candles(symbol_td, interval, outputsize)
+
+    import threading
+    result = [None]
+    def _fetch():
+        try:
+            result[0] = ct.get_candles(symbol_td, interval, outputsize)
+        except Exception as e:
+            logger.error(f"get_candles viga: {e}")
+
+    t = threading.Thread(target=_fetch, daemon=True)
+    t.start()
+    t.join(timeout=30)
+    if t.is_alive():
+        logger.error(f"MT5 andmepäring timeout ({symbol_td} {interval}) — kasutan cache")
+        return _cache.get(cache_key, {}).get("df")
+
+    df = result[0]
     if df is not None and not df.empty:
         _cache[cache_key] = {"df": df, "updated": now}
         return df
-    
+
     return _cache.get(cache_key, {}).get("df")
 
 def get_scalp_data():
-    """Laeb Gold 5min andmeid scalping jaoks."""
+    """Laeb Gold 5min andmeid scalping jaoks — 30s timeout."""
     global _scalp_cache
     now = time.time()
     if now - _scalp_cache["updated"] < 300 and _scalp_cache["df"] is not None:
         return _scalp_cache["df"]
     try:
-        df = ct.get_candles("XAU/USD", interval="5m", count=288)
+        import threading
+        result = [None]
+        def _fetch():
+            try:
+                result[0] = ct.get_candles("XAU/USD", interval="5m", count=288)
+            except Exception: pass
+        t = threading.Thread(target=_fetch, daemon=True)
+        t.start()
+        t.join(timeout=30)
+        if t.is_alive():
+            logger.error("get_scalp_data timeout — kasutan cache")
+            return _scalp_cache["df"]
+        df = result[0]
         if df is None or df.empty: return _scalp_cache["df"]
         _scalp_cache = {"df": df, "updated": now}
         return df
