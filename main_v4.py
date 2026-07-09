@@ -586,7 +586,7 @@ def run_gold_grid(price, high, low, now):
             if range5 > 10:
                 scalp_positions = [p for p in get_gold_positions() if p.get("session","").startswith("scalp")]
                 if len(scalp_positions) < 2:  # max 2 scalp positsiooni
-                    lot_scalp = round(max(0.01, (balance/ACCOUNT_BALANCE)*0.01), 3)
+                    lot_scalp = round(round(max(0.01, (balance/ACCOUNT_BALANCE)*0.01) / 0.01) * 0.01, 2)
 
                     if effective_trend == "bull" and l5 < price - 5:
                         tp_scalp = round(l5 + 10, 2)
