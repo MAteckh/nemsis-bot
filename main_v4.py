@@ -548,10 +548,10 @@ def run_gold_grid(price, high, low, now):
         same = [p for p in get_gold_positions() if p.get("direction")==direction]
         if len(same) >= gl: continue
         lot = get_compound_lot(balance)
-        tp = round(level + 20.0 if direction=="buy" else level - 20.0, 2)
-        sl = None  # SL puudub üksikul positsioonil, float stop kaitseb
+        tp = round(level + 30.0 if direction=="buy" else level - 30.0, 2)
+        sl = round(level - 45.0 if direction=="buy" else level + 45.0, 2)
         # Saada KÕIGEPEALT päris order MT5-sse, kontrolli tulemust
-        order_result = ct.place_order(direction, "XAUUSD", lot, tp=tp, sl=None)
+        order_result = ct.place_order(direction, "XAUUSD", lot, tp=tp, sl=sl)
         if "error" in order_result:
             add_log(f"❌ Gold order ebaõnnestus: {order_result['error']}")
             continue
