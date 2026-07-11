@@ -453,6 +453,36 @@ def calc_gold_tp_sl(direction, level, atr, swing_low, swing_high):
             sl = round(level + sl_max, 2)
     return tp, sl
 
+
+def send_grid_signals(center, trend, gs, tp_dist, sl_dist, lot):
+    """
+    Saada Telegrami valmis grid tasemed XTrend käsitsi sisestamiseks.
+    Iga tase: BUY LIMIT hind / TP hind / SL hind / lot
+    Kõik absoluuthinnad — kopeeri otse XTrend Price väljadesse.
+    """
+    gl = GRID_CONFIG["levels"]
+    lines = [f"🎯 <b>NEMSIS GRID — {trend.upper()}</b>", f"Kese: ${center:.2f} | Lot: {lot}", ""]
+
+    if trend == "bull":
+        lines.append("<b>BUY LIMIT orderid</b> (kopeeri XTrend Price väljadesse):")
+        for i in range(1, gl+1):
+            entry = round(center - i*gs, 2)
+            tp    = round(entry + tp_dist, 2)
+            sl    = round(entry - sl_dist, 2)
+            lines.append(f"{i}. Entry <b>{entry}</b> / TP <b>{tp}</b> / SL <b>{sl}</b>")
+    elif trend == "bear":
+        lines.append("<b>SELL LIMIT orderid</b> (kopeeri XTrend Price väljadesse):")
+        for i in range(1, gl+1):
+            entry = round(center + i*gs, 2)
+            tp    = round(entry - tp_dist, 2)
+            sl    = round(entry + sl_dist, 2)
+            lines.append(f"{i}. Entry <b>{entry}</b> / TP <b>{tp}</b> / SL <b>{sl}</b>")
+
+    lines.append("")
+    lines.append("⚠️ Sisesta Price väljadesse (mitte Pips). Profit väli näitab ≈ kinnitust.")
+    lines.append("💡 Testiks pane esmalt 1 order, vaata et täitub, siis ülejäänud.")
+    send_telegram("\n".join(lines))
+
 def run_gold_grid(price, high, low, now):
     cfg    = INSTRUMENTS["XAUUSD"]
     gs     = cfg["grid_size"]
@@ -483,6 +513,8 @@ def run_gold_grid(price, high, low, now):
         pending = setup_grid(center, effective_trend)
         save_grid_state({"center":center,"trend":effective_trend,"pending":pending})
         add_log(f"🔲 Gold grid initsialiseeritud @ ${center:.0f} | {effective_trend}")
+        # Saada XTrend signaalid käsitsi sisestamiseks
+        send_grid_signals(center, effective_trend, gs, 30.0, 45.0, get_compound_lot(balance))
         return
 
     pending    = grid_state.get("pending", {})
@@ -501,6 +533,7 @@ def run_gold_grid(price, high, low, now):
         new_c = round(price/gs)*gs
         save_grid_state({"center":new_c,"trend":effective_trend,"pending":setup_grid(new_c, effective_trend)})
         add_log(f"🔄 Gold grid reset: {grid_trend}→{effective_trend}")
+        send_grid_signals(new_c, effective_trend, gs, 30.0, 45.0, get_compound_lot(balance))
         return
 
     open_pos = get_gold_positions()
