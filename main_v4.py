@@ -519,6 +519,15 @@ def run_gold_grid(price, high, low, now):
 
     pending    = grid_state.get("pending", {})
     grid_trend = grid_state.get("trend", "neutral")
+    grid_center = grid_state.get("center", price)
+
+    # Auto-reset kui hind on liiga kaugel grid keskusest (3x grid size)
+    if abs(price - grid_center) > gs * 3:
+        new_c = round(price/gs)*gs
+        save_grid_state({"center":new_c,"trend":effective_trend if effective_trend != "neutral" else grid_trend,"pending":setup_grid(new_c, effective_trend if effective_trend != "neutral" else grid_trend)})
+        add_log(f"🔄 Grid auto-reset: hind ${price:.0f} kaugel keskusest ${grid_center:.0f}")
+        send_grid_signals(new_c, effective_trend if effective_trend != "neutral" else grid_trend, gs, 30.0, 45.0, get_compound_lot(balance))
+        return
 
     if effective_trend != grid_trend and effective_trend != "neutral":
         open_pos = get_gold_positions()
