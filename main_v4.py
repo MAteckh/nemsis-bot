@@ -280,6 +280,7 @@ def get_price(symbol_td):
 _atr_history = []
 _claude_cache = {"bias": "neutral", "reason": "", "updated": 0}
 _last_order_time = 0
+_trend_history = []  # viimased trendid — vahetus vajab 3x kinnitust
 
 def get_trend(df):
     period = GRID_CONFIG["trend_period"]
@@ -520,7 +521,14 @@ def run_gold_grid(price, high, low, now):
     atr_val = _atr_history[-1] if _atr_history else 20.0
     session = "london" if 7 <= now.hour < 13 else "new_york" if 13 <= now.hour < 20 else "asia"
     bias = "neutral"  # Claude AI väljas — puhas tehniline trend
-    effective_trend = trend
+    # KAITSE: trend loeb alles siis kui 3 järjestikust scanni sama — väldib flip-flop müra
+    global _trend_history
+    _trend_history.append(trend)
+    if len(_trend_history) > 3: _trend_history.pop(0)
+    if len(_trend_history) == 3 and all(t == _trend_history[0] for t in _trend_history):
+        effective_trend = trend
+    else:
+        effective_trend = "neutral"  # pole kinnitatud — ära tee midagi
 
     balance    = get_balance()
     grid_state = get_grid_state()
@@ -611,12 +619,12 @@ def run_gold_grid(price, high, low, now):
         lot = get_compound_lot(balance)
         tp = round(level + 30.0 if direction=="buy" else level - 30.0, 2)
         sl = round(level - 45.0 if direction=="buy" else level + 45.0, 2)
-        # KAITSE 1: max 2 lahtist positsiooni
-        if len(ct.get_open_positions("XAUUSD")) >= 2:
+        # KAITSE 1: max 3 lahtist positsiooni (variant C — backtest +422€/kuu)
+        if len(ct.get_open_positions("XAUUSD")) >= 3:
             continue
         # KAITSE 2: cooldown 15 min viimasest orderist
         global _last_order_time
-        if time.time() - _last_order_time < 900:
+        if time.time() - _last_order_time < 480:
             continue
         # Saada KÕIGEPEALT päris order MT5-sse, kontrolli tulemust
         order_result = ct.place_order(direction, "XAUUSD", lot, tp=tp, sl=sl)
