@@ -279,6 +279,7 @@ def get_price(symbol_td):
 
 _atr_history = []
 _claude_cache = {"bias": "neutral", "reason": "", "updated": 0}
+_last_order_time = 0
 
 def get_trend(df):
     period = GRID_CONFIG["trend_period"]
@@ -483,7 +484,25 @@ def send_grid_signals(center, trend, gs, tp_dist, sl_dist, lot):
     lines.append("💡 Testiks pane esmalt 1 order, vaata et täitub, siis ülejäänud.")
     send_telegram("\n".join(lines))
 
+_day_start_equity = {"day": "", "equity": 0.0}
+
+def check_daily_equity_halt():
+    """Peata kauplemine kui päeva equity kahjum > 10%."""
+    global _day_start_equity
+    eq = ct.get_account_equity()
+    if not eq: return False
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    if _day_start_equity["day"] != today:
+        _day_start_equity = {"day": today, "equity": eq}
+        return False
+    start = _day_start_equity["equity"]
+    if start > 0 and (start - eq) / start > 0.10:
+        add_log(f"🛑 PÄEVALIMIIT: equity {eq:.2f} on -10% päeva algusest {start:.2f} — kauplemine peatatud")
+        return True
+    return False
+
 def run_gold_grid(price, high, low, now):
+    if check_daily_equity_halt(): return
     cfg    = INSTRUMENTS["XAUUSD"]
     gs     = cfg["grid_size"]
     gl     = GRID_CONFIG["levels"]
@@ -519,10 +538,10 @@ def run_gold_grid(price, high, low, now):
 
     pending    = grid_state.get("pending", {})
     grid_trend = grid_state.get("trend", "neutral")
-    grid_center = grid_state.get("center", price)
+    grid_center = grid_state.get("center", grid_state.get("grid", {}).get("center", price))
 
     # Auto-reset kui hind on liiga kaugel grid keskusest (3x grid size)
-    if abs(price - grid_center) > gs * 3:
+    if abs(price - grid_center) > gs * 3 and len(ct.get_open_positions("XAUUSD")) == 0:
         new_c = round(price/gs)*gs
         save_grid_state({"center":new_c,"trend":effective_trend if effective_trend != "neutral" else grid_trend,"pending":setup_grid(new_c, effective_trend if effective_trend != "neutral" else grid_trend)})
         add_log(f"🔄 Grid auto-reset: hind ${price:.0f} kaugel keskusest ${grid_center:.0f}")
@@ -592,8 +611,17 @@ def run_gold_grid(price, high, low, now):
         lot = get_compound_lot(balance)
         tp = round(level + 30.0 if direction=="buy" else level - 30.0, 2)
         sl = round(level - 45.0 if direction=="buy" else level + 45.0, 2)
+        # KAITSE 1: max 2 lahtist positsiooni
+        if len(ct.get_open_positions("XAUUSD")) >= 2:
+            continue
+        # KAITSE 2: cooldown 15 min viimasest orderist
+        global _last_order_time
+        if time.time() - _last_order_time < 900:
+            continue
         # Saada KÕIGEPEALT päris order MT5-sse, kontrolli tulemust
         order_result = ct.place_order(direction, "XAUUSD", lot, tp=tp, sl=sl)
+        if "error" not in order_result:
+            _last_order_time = time.time()
         if "error" in order_result:
             add_log(f"❌ Gold order ebaõnnestus: {order_result['error']}")
             continue
