@@ -84,8 +84,7 @@ header::after{content:'';position:absolute;bottom:0;left:0;right:0;height:1px;
 .sv{color:var(--gold2);font-size:11px;min-width:55px;text-align:right;font-weight:600}
 
 .stats{display:grid;grid-template-columns:repeat(2,1fr);gap:1px;background:var(--bordergold)}
-@media(min-width:560px){.stats{grid-template-columns:repeat(3,1fr)}}
-@media(min-width:900px){.stats{grid-template-columns:repeat(6,1fr)}}
+@media(min-width:560px){.stats{grid-template-columns:repeat(4,1fr)}}
 .sc{background:var(--bg1);padding:16px 20px;position:relative;overflow:hidden;transition:background .2s}
 .sc:hover{background:var(--bg2)}
 .sc::before{content:'';position:absolute;top:0;left:0;right:0;height:1.5px;animation:gold-bar 2.5s ease-in-out infinite}
@@ -210,9 +209,7 @@ footer{display:flex;justify-content:space-between;align-items:center;flex-wrap:w
   <div class="sc cg"><div class="sbg">$∞</div><div class="slbl">Balance</div><div class="sval cg" id="bal">—</div><div class="ssub" id="ls">—</div></div>
   <div class="sc cn"><div class="slbl">Kasv algusest</div><div class="sval cn" id="gr">—</div><div class="ssub">algkapital 200€</div></div>
   <div class="sc cgr"><div class="slbl">Gold pos</div><div class="sval cgr" id="gp">—</div><div class="ssub">XAUUSD grid</div></div>
-  <div class="sc cb"><div class="slbl">Forex pos</div><div class="sval cb" id="fp">—</div><div class="ssub">10 paari</div></div>
   <div class="sc cg"><div class="slbl">Gold hind</div><div class="sval cg" id="gpr">—</div><div class="ssub" id="gt">—</div></div>
-  <div class="sc cr"><div class="slbl">Paarid</div><div class="sval cr">11</div><div class="ssub">1 kuld · 10 forex</div></div>
 </div>
 
 <div class="ai-box">
@@ -228,7 +225,7 @@ footer{display:flex;justify-content:space-between;align-items:center;flex-wrap:w
   <div class="secdot" style="background:var(--gold);opacity:.5"></div>
   <span class="sect">Instrument Status</span>
   <div class="secl"></div>
-  <span class="secc" id="ic">11 / 11 active</span>
+  <span class="secc" id="ic">1 / 1 active</span>
 </div>
 <div class="ig" id="ig"><div class="nd">Loading...</div></div>
 
@@ -257,22 +254,12 @@ footer{display:flex;justify-content:space-between;align-items:center;flex-wrap:w
   </div>
   <div class="sp">
     <div class="stit">Portfolio</div>
-    <div class="pr"><div class="pd" style="background:var(--gold)"></div><div class="pn" style="color:var(--gold)">XAUUSD</div><div class="pi">Trend Grid · 1h · Claude AI</div></div>
-    <div class="pr"><div class="pd" style="background:var(--blue)"></div><div class="pn" style="color:var(--blue)">AUDCAD</div><div class="pi">Mean Rev · 15m · RSI 30/70</div></div>
-    <div class="pr"><div class="pd" style="background:var(--blue)"></div><div class="pn" style="color:var(--blue)">EURAUD</div><div class="pi">Mean Rev · 15m · RSI 30/70</div></div>
-    <div class="pr"><div class="pd" style="background:var(--blue)"></div><div class="pn" style="color:var(--blue)">AUDNZD</div><div class="pi">Mean Rev · 15m · RSI 30/70</div></div>
-    <div class="pr"><div class="pd" style="background:var(--blue)"></div><div class="pn" style="color:var(--blue)">GBPCAD</div><div class="pi">Mean Rev · 15m · RSI 30/70</div></div>
-    <div class="pr"><div class="pd" style="background:var(--blue)"></div><div class="pn" style="color:var(--blue)">EURGBP</div><div class="pi">Mean Rev · 15m · RSI 30/70</div></div>
-    <div class="pr"><div class="pd" style="background:var(--blue)"></div><div class="pn" style="color:var(--blue)">CADCHF</div><div class="pi">Mean Rev · 15m · RSI 30/70</div></div>
-    <div class="pr"><div class="pd" style="background:var(--blue)"></div><div class="pn" style="color:var(--blue)">EURCHF</div><div class="pi">Mean Rev · 15m · RSI 30/70</div></div>
-    <div class="pr"><div class="pd" style="background:var(--blue)"></div><div class="pn" style="color:var(--blue)">NZDCAD</div><div class="pi">Mean Rev · 1h · RSI 30/70</div></div>
-    <div class="pr"><div class="pd" style="background:var(--cyan)"></div><div class="pn" style="color:var(--cyan)">EURNZD</div><div class="pi">Mean Rev · 15m · RSI 30/70</div></div>
-    <div class="pr"><div class="pd" style="background:var(--cyan)"></div><div class="pn" style="color:var(--cyan)">GBPNZD</div><div class="pi">Mean Rev · 15m · RSI 30/70</div></div>
+    <div class="pr"><div class="pd" style="background:var(--gold)"></div><div class="pn" style="color:var(--gold)">XAUUSD</div><div class="pi">Trend Grid · 1h</div></div>
   </div>
 </div>
 
 <footer>
-  <span>$∞ NEMSIS v4 · INFINITE GAINS · ICMarkets EU</span>
+  <span>$∞ NEMSIS v4 · INFINITE GAINS · BlackBull Markets</span>
   <span id="ft">—</span>
 </footer>
 </div>
@@ -290,8 +277,8 @@ footer{display:flex;justify-content:space-between;align-items:center;flex-wrap:w
 </div>
 
 <script>
-const SB='https://xqinzjaqorjqaexeoyqc.supabase.co',KEY='sb_publishable_eGAHjERYuK9ztviFer41CQ_6FouGpQU',S0=198
-const I={XAUUSD:{n:'XAU/USD',t:'g',tf:'1h',s:'Trend Grid'},AUDCAD:{n:'AUD/CAD',t:'f',tf:'15m',s:'Mean Rev'},EURAUD:{n:'EUR/AUD',t:'f',tf:'15m',s:'Mean Rev'},AUDNZD:{n:'AUD/NZD',t:'f',tf:'15m',s:'Mean Rev'},GBPCAD:{n:'GBP/CAD',t:'f',tf:'15m',s:'Mean Rev'},EURGBP:{n:'EUR/GBP',t:'f',tf:'15m',s:'Mean Rev'},CADCHF:{n:'CAD/CHF',t:'f',tf:'15m',s:'Mean Rev'},EURCHF:{n:'EUR/CHF',t:'f',tf:'15m',s:'Mean Rev'},NZDCAD:{n:'NZD/CAD',t:'f',tf:'1h',s:'Mean Rev'},EURNZD:{n:'EUR/NZD',t:'n',tf:'15m',s:'Mean Rev'},GBPNZD:{n:'GBP/NZD',t:'n',tf:'15m',s:'Mean Rev'}}
+const SB='https://xqinzjaqorjqaexeoyqc.supabase.co',KEY='sb_publishable_eGAHjERYuK9ztviFer41CQ_6FouGpQU',S0=101.31
+const I={XAUUSD:{n:'XAU/USD',t:'g',tf:'1h',s:'Trend Grid'}}
 
 // particles
 ;(()=>{
@@ -326,12 +313,11 @@ async function load(){
     const ge=document.getElementById('gr');ge.textContent=(g>=0?'+':'')+g.toFixed(1)+'%';ge.style.color=g>=0?'var(--cyan)':'var(--red)'
     document.getElementById('gpr').textContent=st.price?'$'+parseFloat(st.price).toFixed(2):'—'
     document.getElementById('gt').textContent=st.trend?st.trend.toUpperCase():'—'
-    const gpos=(pos||[]).filter(p=>p.regime==='grid'),fpos=(pos||[]).filter(p=>p.regime==='meanrev')
+    const gpos=(pos||[]).filter(p=>p.regime==='grid')
     document.getElementById('gp').textContent=gpos.length
-    document.getElementById('fp').textContent=fpos.length
-    document.getElementById('pc').textContent=(gpos.length+fpos.length)+' open'
-    document.getElementById('ic').textContent='11 / 11 active'
-    const nc=gpos.length+fpos.length;if(nc<lpc&&lpc>0)confetti();lpc=nc
+    document.getElementById('pc').textContent=gpos.length+' open'
+    document.getElementById('ic').textContent='1 / 1 active'
+    const nc=gpos.length;if(nc<lpc&&lpc>0)confetti();lpc=nc
     const bias=st.claude_bias||'neutral'
     document.getElementById('ab').textContent='$∞  CLAUDE AI · '+bias.toUpperCase()+' MARKET BIAS'
     document.getElementById('ar').textContent=st.claude_reason||'Market analysis pending...'
@@ -345,9 +331,9 @@ async function load(){
       const bc=trend==='bull'?'bull':trend==='bear'?'bear':trend==='ranging'?'rng':'neu'
       return`<div class="ic ${isG?'ig':'if'}"><div class="iname" style="color:${isG?'var(--gold2)':'var(--text)'}">${info.n}</div><div class="istrat">${info.s} · ${info.tf}</div><div style="display:flex;justify-content:space-between;align-items:center;margin:6px 0 8px"><span class="badge ${bc}">${trend.toUpperCase()}</span></div><div class="iprice" style="color:${isG?'var(--gold2)':'var(--text)'}">${price}</div><div class="ifoot"><span style="color:var(--text3)">POS</span><strong style="color:var(--green)">${sp}</strong></div></div>`
     }).join('')
-    const pb=document.getElementById('pb')
-    if(!pos||!pos.length){pb.innerHTML='<tr><td colspan="7" class="nd">No active targets</td></tr>'}
-    else pb.innerHTML=pos.map(p=>{const sym=p.regime==='grid'?'XAUUSD':(p.session||'—');const info=I[sym]||{tf:'—',s:'—'};const isG=p.regime==='grid';const fmt=v=>isG?parseFloat(v||0).toFixed(2):parseFloat(v||0).toFixed(5);return`<tr><td class="tsym">${sym}</td><td class="${p.direction==='buy'?'tbuy':'tsell'}">${p.direction==='buy'?'▲ BUY':'▼ SELL'}</td><td>${fmt(p.entry)}</td><td class="ttp">${fmt(p.tp)}</td><td style="color:var(--text2)">${p.lot||'0.01'}</td><td style="color:var(--text3)">${info.s}</td><td style="color:var(--blue)">${info.tf}</td></tr>`}).join('')
+    const pb=document.getElementById('pb'),gposOnly=gpos
+    if(!gposOnly||!gposOnly.length){pb.innerHTML='<tr><td colspan="7" class="nd">No active targets</td></tr>'}
+    else pb.innerHTML=gposOnly.map(p=>{const sym=p.regime==='grid'?'XAUUSD':(p.session||'—');const info=I[sym]||{tf:'—',s:'—'};const isG=p.regime==='grid';const fmt=v=>isG?parseFloat(v||0).toFixed(2):parseFloat(v||0).toFixed(5);return`<tr><td class="tsym">${sym}</td><td class="${p.direction==='buy'?'tbuy':'tsell'}">${p.direction==='buy'?'▲ BUY':'▼ SELL'}</td><td>${fmt(p.entry)}</td><td class="ttp">${fmt(p.tp)}</td><td style="color:var(--text2)">${p.lot||'0.01'}</td><td style="color:var(--text3)">${info.s}</td><td style="color:var(--blue)">${info.tf}</td></tr>`}).join('')
     const lw=document.getElementById('lw')
     if(logs.length)lw.innerHTML=[...logs].reverse().map(l=>{let c='';if(l.includes('✅'))c='tp';else if(l.includes('❌')||l.includes('ERROR'))c='er';else if(l.includes('🤖')||l.includes('Claude'))c='ai';else if(l.includes('⚡'))c='sc';else if(l.includes('💱')||l.includes('🥇'))c='pr';const pt=l.split('  ');return`<div class="ll"><span class="lt">${pt[0]||''}</span><span class="lm ${c}">${pt.slice(1).join('  ')}</span></div>`}).join('')
     document.getElementById('ft').textContent='LAST SCAN: '+new Date().toLocaleTimeString('et-EE')+' UTC'
