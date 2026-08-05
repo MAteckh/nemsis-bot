@@ -6,6 +6,8 @@ Strateegiad:
 - XAUUSD: Trend-Aware Grid (kuld)
 - AUDCAD, AUDNZD, EURGBP, EURCHF, NZDCAD: Mean Reversion
 """
+from dotenv import load_dotenv
+load_dotenv()
 import sys, os, json, time, logging, requests
 from datetime import datetime, timezone
 import pandas as pd
@@ -393,6 +395,7 @@ def sync_mt5_positions():
         if not sb_open:
             return mt5_tickets
 
+        closed_found = False
         for pos in sb_open:
             ticket = pos.get("mt5_ticket")
             if ticket is None:
@@ -401,6 +404,18 @@ def sync_mt5_positions():
                 # MT5-s suletud aga Supabase-s lahti — märgi suletuks
                 sb_upsert("signals", {"id": pos["id"], "executed": True})
                 add_log(f"🔄 Sync: positsioon {ticket} suletud MT5 poolt → Supabase uuendatud")
+                closed_found = True
+
+        if closed_found:
+            # Positsioon suleti broker'i enda TP/SL kaudu, enne kui bot ise jõudis
+            # seda tuvastada — see haru ei arvutanud kunagi P&L-i balance'ile.
+            # Sünkroniseeri balance otse päris MT5 kontoseisuga (juba kasutuses
+            # ja tõestatud get_balance() funktsioonis), et dashboard ei jääks
+            # vananenud numbrit näitama.
+            real_balance = ct.get_account_balance()
+            if real_balance and real_balance > 0:
+                sb_upsert("bot_state", {"id": 1, "balance": round(float(real_balance), 2)})
+                add_log(f"🔄 Sync: balance uuendatud päris MT5 väärtusega {real_balance:.2f}€")
 
         return mt5_tickets
     except Exception as e:
