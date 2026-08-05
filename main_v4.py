@@ -485,18 +485,37 @@ def send_grid_signals(center, trend, gs, tp_dist, sl_dist, lot):
     lines.append("💡 Testiks pane esmalt 1 order, vaata et täitub, siis ülejäänud.")
     send_telegram("\n".join(lines))
 
-_day_start_equity = {"day": "", "equity": 0.0}
+def get_daily_halt_state():
+    rows = sb_select("bot_state", "id=eq.1&select=risk")
+    if rows and rows[0].get("risk") and "daily_gold_halt" in rows[0]["risk"]:
+        return rows[0]["risk"]["daily_gold_halt"]
+    return {"day": "", "equity": 0.0}
+
+def save_daily_halt_state(state):
+    try:
+        rows = sb_select("bot_state", "id=eq.1&select=risk")
+        risk = rows[0].get("risk", {}) if rows else {}
+        risk["daily_gold_halt"] = state
+        sb_upsert("bot_state", {"id": 1, "risk": risk})
+    except Exception as e:
+        logger.error(f"save_daily_halt: {e}")
 
 def check_daily_equity_halt():
-    """Peata kauplemine kui päeva equity kahjum > 10%."""
-    global _day_start_equity
+    """
+    Peata kulla kauplemine kui päeva equity kahjum > 10%.
+    Olek salvestatakse Supabase's (mitte mälu-globaalis), et püsiks
+    bot restardi üle — varem lähtestus see iga restardiga, mis
+    nõrgendas kaitset vaikselt just siis kui restart toimus halval päeval.
+    """
     eq = ct.get_account_equity()
     if not eq: return False
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    if _day_start_equity["day"] != today:
-        _day_start_equity = {"day": today, "equity": eq}
+    state = get_daily_halt_state()
+    if state.get("day") != today:
+        state = {"day": today, "equity": eq}
+        save_daily_halt_state(state)
         return False
-    start = _day_start_equity["equity"]
+    start = state.get("equity", 0)
     if start > 0 and (start - eq) / start > 0.10:
         add_log(f"🛑 PÄEVALIMIIT: equity {eq:.2f} on -10% päeva algusest {start:.2f} — kauplemine peatatud")
         return True
@@ -563,9 +582,19 @@ def run_gold_grid(price, high, low, now):
             d     = pos.get("direction","buy")
             fl    = (price-entry)*get_compound_lot(balance)*100 if d=="buy" else (entry-price)*get_compound_lot(balance)*100
             if fl < 0:
-                balance = round(balance+fl, 2)
-                sb_upsert("signals", {"id":pos["id"],"executed":True})
-                sb_upsert("bot_state", {"id":1,"balance":balance})
+                # Sulge PÄRIS MT5 positsioon ENNE Supabase uuendust
+                # (varem puudus — Supabase märkis "suletuks" aga MT5 positsioon
+                #  jäi tegelikult lahti ja jooksis kuni oma algse kauge SL-ini)
+                ticket = pos.get("mt5_ticket")
+                close_ok = True
+                if ticket:
+                    close_ok = ct.close_position(int(ticket))
+                    if not close_ok:
+                        add_log(f"⚠️ Trend reset: MT5 positsioon {ticket} sulgemine ebaõnnestus — proovin uuesti järgmisel scannil")
+                if close_ok:
+                    balance = round(balance+fl, 2)
+                    sb_upsert("signals", {"id":pos["id"],"executed":True})
+                    sb_upsert("bot_state", {"id":1,"balance":balance})
         new_c = round(price/gs)*gs
         save_grid_state({"center":new_c,"trend":effective_trend,"pending":setup_grid(new_c, effective_trend)})
         add_log(f"🔄 Gold grid reset: {grid_trend}→{effective_trend}")
@@ -598,14 +627,16 @@ def run_gold_grid(price, high, low, now):
         if fl < -get_scaled_max_float(balance):
             # Sulge PÄRIS MT5 positsioon
             ticket = pos.get("mt5_ticket")
+            close_ok = True
             if ticket:
-                closed = ct.close_position(int(ticket))
-                if not closed:
-                    add_log(f"⚠️ Float stop: MT5 positsioon {ticket} sulgemine ebaõnnestus!")
-            balance = round(balance+fl, 2)
-            sb_upsert("signals", {"id":pid,"executed":True})
-            sb_upsert("bot_state", {"id":1,"balance":balance})
-            add_log(f"🛡 Gold float stop: {d.upper()} @ {entry:.0f}  {fl:+.2f}€")
+                close_ok = ct.close_position(int(ticket))
+                if not close_ok:
+                    add_log(f"⚠️ Float stop: MT5 positsioon {ticket} sulgemine ebaõnnestus — proovin uuesti järgmisel scannil")
+            if close_ok:
+                balance = round(balance+fl, 2)
+                sb_upsert("signals", {"id":pid,"executed":True})
+                sb_upsert("bot_state", {"id":1,"balance":balance})
+                add_log(f"🛡 Gold float stop: {d.upper()} @ {entry:.0f}  {fl:+.2f}€")
 
     triggered = []
     for level_str, direction in list(pending.items()):
@@ -620,9 +651,15 @@ def run_gold_grid(price, high, low, now):
         tp = round(level + 30.0 if direction=="buy" else level - 30.0, 2)
         sl = round(level - 45.0 if direction=="buy" else level + 45.0, 2)
         # KAITSE 1: max 3 lahtist positsiooni (variant C — backtest +422€/kuu)
-        if len(ct.get_open_positions("XAUUSD")) >= 3:
+        open_now = ct.get_open_positions("XAUUSD")
+        if len(open_now) >= 3:
             continue
-        # KAITSE 2: cooldown 15 min viimasest orderist
+        # KAITSE 6: ei ava hedge (BUY+SELL korraga)
+        if open_now:
+            existing_dir = open_now[0].get("direction", "")
+            if existing_dir and existing_dir != direction:
+                continue
+        # KAITSE 2: cooldown 8 min viimasest orderist
         global _last_order_time
         if time.time() - _last_order_time < 480:
             continue
