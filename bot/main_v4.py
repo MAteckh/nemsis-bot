@@ -581,20 +581,21 @@ def run_gold_grid(price, high, low, now):
             entry = float(pos.get("entry",0))
             d     = pos.get("direction","buy")
             fl    = (price-entry)*get_compound_lot(balance)*100 if d=="buy" else (entry-price)*get_compound_lot(balance)*100
-            if fl < 0:
-                # Sulge PÄRIS MT5 positsioon ENNE Supabase uuendust
-                # (varem puudus — Supabase märkis "suletuks" aga MT5 positsioon
-                #  jäi tegelikult lahti ja jooksis kuni oma algse kauge SL-ini)
-                ticket = pos.get("mt5_ticket")
-                close_ok = True
-                if ticket:
-                    close_ok = ct.close_position(int(ticket))
-                    if not close_ok:
-                        add_log(f"⚠️ Trend reset: MT5 positsioon {ticket} sulgemine ebaõnnestus — proovin uuesti järgmisel scannil")
-                if close_ok:
-                    balance = round(balance+fl, 2)
-                    sb_upsert("signals", {"id":pos["id"],"executed":True})
-                    sb_upsert("bot_state", {"id":1,"balance":balance})
+            # Sulge PÄRIS MT5 positsioon ENNE Supabase uuendust — KÕIK vastutrendi
+            # positsioonid (kaotuses JA kasumis). Backtest (30 juhuslikku hinnateed)
+            # näitas seda paremaks kui ainult kaotuses olevate sulgemist: kasumis
+            # positsioon jäetuna lahti samasse vastutrendi, mis kaotusi tekitab,
+            # ei ole reaalselt kaitstud kasum, vaid ohus paberkasum.
+            ticket = pos.get("mt5_ticket")
+            close_ok = True
+            if ticket:
+                close_ok = ct.close_position(int(ticket))
+                if not close_ok:
+                    add_log(f"⚠️ Trend reset: MT5 positsioon {ticket} sulgemine ebaõnnestus — proovin uuesti järgmisel scannil")
+            if close_ok:
+                balance = round(balance+fl, 2)
+                sb_upsert("signals", {"id":pos["id"],"executed":True})
+                sb_upsert("bot_state", {"id":1,"balance":balance})
         new_c = round(price/gs)*gs
         save_grid_state({"center":new_c,"trend":effective_trend,"pending":setup_grid(new_c, effective_trend)})
         add_log(f"🔄 Gold grid reset: {grid_trend}→{effective_trend}")
