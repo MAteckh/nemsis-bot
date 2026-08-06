@@ -664,8 +664,12 @@ def run_gold_grid(price, high, low, now):
         same = [p for p in get_gold_positions() if p.get("direction")==direction]
         if len(same) >= gl: continue
         lot = get_compound_lot(balance)
-        tp = round(level + 30.0 if direction=="buy" else level - 30.0, 2)
-        sl = round(level - 45.0 if direction=="buy" else level + 45.0, 2)
+        # TP/SL arvutatakse PÄRIS hetkehinna (price) pealt, mitte vana
+        # pending-taseme (level) pealt — order on market order, mis täitub
+        # kohese turuhinnaga, mis võib vanast level'ist kaugel olla, kui
+        # pending tase jäi Supabase'i seisma (nt bot restart vahepeal).
+        tp = round(price + 30.0 if direction=="buy" else price - 30.0, 2)
+        sl = round(price - 45.0 if direction=="buy" else price + 45.0, 2)
         # KAITSE 1: max 3 lahtist positsiooni (variant C — backtest +422€/kuu)
         open_now = ct.get_open_positions("XAUUSD")
         if len(open_now) >= 3:
