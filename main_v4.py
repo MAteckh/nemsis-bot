@@ -313,8 +313,8 @@ def get_vol_mult():
     return GRID_CONFIG["vol_boost"] if cur > avg*GRID_CONFIG["vol_thresh"] else 1.0
 
 def get_compound_lot(balance):
-    base = round(max(0.01, (balance/ACCOUNT_BALANCE)*0.01), 3)
-    return round(base * get_vol_mult(), 3)
+    base = round(max(0.01, (balance/ACCOUNT_BALANCE)*0.01), 2)
+    return round(base * get_vol_mult(), 2)
 
 def get_scaled_max_float(balance):
     """Max floating loss skaleerub koos kontoga."""
