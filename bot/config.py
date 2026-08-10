@@ -8,8 +8,8 @@ INSTRUMENTS = {
     "XAUUSD": {
         "strategy":     "grid",
         "lot":          0.01,
-        "grid_size":    30.0,
-        "trend_thresh": 3.0,
+        "grid_size":    15.0,
+        "trend_thresh": 0.9,
         "pip_value":    100,
         "symbol_td":    "XAU/USD",
         "interval":     "1h",
@@ -165,8 +165,8 @@ MEANREV_CONFIG = {
 # Grid parameetrid (kullale)
 GRID_CONFIG = {
     "levels":      8,
-    "max_float":   100.0,
-    "trend_period": 50,
+    "max_float":   80.0,
+    "trend_period": 10,
     "vol_thresh":  1.3,
     "vol_boost":   1.5,
 }
