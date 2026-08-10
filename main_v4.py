@@ -537,6 +537,35 @@ def check_daily_equity_halt():
     return False
 
 def run_gold_grid(price, high, low, now):
+    # ── NÄDALAVAHETUS — reede 21:00 UTC sulge kõik, lau/püha ei kauple üldse ──
+    # (sama muster mis strategy_meanrev.py-s forexile juba olemas —
+    #  kuld seda seni ei omanud, mis põhjustas SL-tabamusi nädalavahetuse
+    #  gap/thin-liquidity liikumisest)
+    if now.weekday() == 4 and now.hour >= 21:
+        open_pos = get_gold_positions()
+        if open_pos:
+            balance = get_balance()
+            for pos in open_pos:
+                entry = float(pos.get("entry", 0))
+                d     = pos.get("direction", "buy")
+                lot   = get_compound_lot(balance)
+                fl    = (price-entry)*lot*100 if d == "buy" else (entry-price)*lot*100
+                ticket = pos.get("mt5_ticket")
+                close_ok = True
+                if ticket:
+                    close_ok = ct.close_position(int(ticket))
+                    if not close_ok:
+                        add_log(f"⚠️ Weekend sulgemine: MT5 positsioon {ticket} sulgemine ebaõnnestus")
+                if close_ok:
+                    balance = round(balance+fl, 2)
+                    sb_upsert("signals", {"id": pos["id"], "executed": True})
+                    sb_upsert("bot_state", {"id": 1, "balance": balance})
+            add_log(f"🔒 Gold weekend sulgemine — {len(open_pos)} positsiooni suletud")
+            send_telegram(f"🔒 <b>Gold weekend sulgemine</b>\n{len(open_pos)} positsiooni suletud enne nädalavahetust")
+        return
+    if now.weekday() in (5, 6):
+        return
+
     if check_daily_equity_halt(): return
     cfg    = INSTRUMENTS["XAUUSD"]
     gs     = cfg["grid_size"]
