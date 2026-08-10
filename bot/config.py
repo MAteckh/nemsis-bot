@@ -9,7 +9,7 @@ INSTRUMENTS = {
         "strategy":     "grid",
         "lot":          0.01,
         "grid_size":    15.0,
-        "trend_thresh": 0.9,
+        "trend_thresh": 0.4,
         "pip_value":    100,
         "symbol_td":    "XAU/USD",
         "interval":     "1h",
