@@ -753,34 +753,39 @@ def run_gold_grid(price, high, low, now):
                     lot_scalp = round(round(max(0.01, (balance/ACCOUNT_BALANCE)*0.01) / 0.01) * 0.01, 2)
 
                     if effective_trend == "bull" and l5 < price - 5:
-                        tp_scalp = round(l5 + 10, 2)
-                        sl_scalp = round(l5 - 15, 2)
+                        # TP/SL arvutatakse PÄRIS hetkehinna (price) pealt, mitte vana
+                        # l5 (5min madalpunkt) pealt — order on market order, mis täitub
+                        # kohese turuhinnaga, mistõttu vana l5-põhine TP oli tihti juba
+                        # peaaegu käes enne kui order üldse täitus (nt +0,90€ 18 sek pärast).
+                        tp_scalp = round(price + 10, 2)
+                        sl_scalp = round(price - 15, 2)
                         scalp_result = ct.place_order("buy", "XAUUSD", lot_scalp, tp=tp_scalp, sl=sl_scalp)
                         if "error" not in scalp_result:
                             sb_insert("signals", {
-                                "direction":"buy","entry":round(l5,2),"tp":tp_scalp,
+                                "direction":"buy","entry":round(price,2),"tp":tp_scalp,
                                 "sl":sl_scalp,"lot":lot_scalp,"regime":"grid",
                                 "session":"scalp_bull","executed":False,"breakeven":False,
                                 "atr":range5,"score":1,"rr":0.67,
                                 "mt5_ticket": scalp_result.get("orderId"),
                             })
-                            add_log(f"⚡ Scalp BUY @ {l5:.0f} TP:{tp_scalp:.0f}")
+                            add_log(f"⚡ Scalp BUY @ {price:.0f} TP:{tp_scalp:.0f}")
                         else:
                             add_log(f"❌ Scalp BUY ebaõnnestus: {scalp_result['error']}")
 
                     elif effective_trend == "bear" and h5 > price + 5:
-                        tp_scalp = round(h5 - 10, 2)
-                        sl_scalp = round(h5 + 15, 2)
+                        # Sama parandus mis BUY harus — price, mitte vana h5
+                        tp_scalp = round(price - 10, 2)
+                        sl_scalp = round(price + 15, 2)
                         scalp_result = ct.place_order("sell", "XAUUSD", lot_scalp, tp=tp_scalp, sl=sl_scalp)
                         if "error" not in scalp_result:
                             sb_insert("signals", {
-                                "direction":"sell","entry":round(h5,2),"tp":tp_scalp,
+                                "direction":"sell","entry":round(price,2),"tp":tp_scalp,
                                 "sl":sl_scalp,"lot":lot_scalp,"regime":"grid",
                                 "session":"scalp_bear","executed":False,"breakeven":False,
                                 "atr":range5,"score":1,"rr":0.67,
                                 "mt5_ticket": scalp_result.get("orderId"),
                             })
-                            add_log(f"⚡ Scalp SELL @ {h5:.0f} TP:{tp_scalp:.0f}")
+                            add_log(f"⚡ Scalp SELL @ {price:.0f} TP:{tp_scalp:.0f}")
                         else:
                             add_log(f"❌ Scalp SELL ebaõnnestus: {scalp_result['error']}")
     except Exception as e:
