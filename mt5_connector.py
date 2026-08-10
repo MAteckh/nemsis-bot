@@ -20,7 +20,6 @@ MAGIC = 234000
 
 _connected = False
 
-# MT5 timeframe map
 _TF_MAP = {
     "1m":  mt5.TIMEFRAME_M1,
     "5m":  mt5.TIMEFRAME_M5,
@@ -31,7 +30,6 @@ _TF_MAP = {
     "1d":  mt5.TIMEFRAME_D1,
 }
 
-# Symbol map: TwelveData nimi -> MT5 nimi
 _SYMBOL_MAP = {
     "XAU/USD": "XAUUSD",
     "XAUUSD":  "XAUUSD",
@@ -145,6 +143,17 @@ def place_order(direction, symbol_name, lot, tp=None, sl=None):
     order_type = mt5.ORDER_TYPE_BUY if direction == "buy" else mt5.ORDER_TYPE_SELL
     price = tick.ask if direction == "buy" else tick.bid
 
+    # Küsi broker'i PÄRIS minimaalne stopi-vahemaa (trade_stops_level/
+    # trade_freeze_level, punktides) ja laienda TP/SL vajadusel selle
+    # täitmiseks — varem lükkas broker mõned scalp-orderid tagasi
+    # "Invalid stops" (10016) veaga, kui arvutatud SL/TP jäi liiga lähedale.
+    info = mt5.symbol_info(sym)
+    min_dist = 0.0
+    if info is not None:
+        min_stop_points = max(getattr(info, "trade_stops_level", 0),
+                               getattr(info, "trade_freeze_level", 0))
+        min_dist = min_stop_points * info.point
+
     request = {
         "action":   mt5.TRADE_ACTION_DEAL,
         "symbol":   sym,
@@ -158,9 +167,21 @@ def place_order(direction, symbol_name, lot, tp=None, sl=None):
         "type_filling": mt5.ORDER_FILLING_IOC,
     }
     if tp:
-        request["tp"] = float(tp)
+        tp_val = float(tp)
+        if min_dist > 0:
+            if direction == "buy" and tp_val - price < min_dist:
+                tp_val = round(price + min_dist, 2)
+            elif direction == "sell" and price - tp_val < min_dist:
+                tp_val = round(price - min_dist, 2)
+        request["tp"] = tp_val
     if sl:
-        request["sl"] = float(sl)
+        sl_val = float(sl)
+        if min_dist > 0:
+            if direction == "buy" and price - sl_val < min_dist:
+                sl_val = round(price - min_dist, 2)
+            elif direction == "sell" and sl_val - price < min_dist:
+                sl_val = round(price + min_dist, 2)
+        request["sl"] = sl_val
 
     result = mt5.order_send(request)
     if result is None:
@@ -197,7 +218,6 @@ def close_position(ticket):
         logger.error(f"close_position: tick puudub {sym}")
         return False
 
-    # Sulgemiseks vastupidine suund
     close_type = mt5.ORDER_TYPE_SELL if p.type == mt5.ORDER_TYPE_BUY else mt5.ORDER_TYPE_BUY
     price = tick.bid if p.type == mt5.ORDER_TYPE_BUY else tick.ask
 
