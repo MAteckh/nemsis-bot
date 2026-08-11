@@ -686,6 +686,7 @@ def run_gold_grid(price, high, low, now):
     triggered = []
     for level_str, direction in list(pending.items()):
         level = float(level_str)
+        if effective_trend == "neutral": continue
         if effective_trend=="bull" and direction=="sell": continue
         if effective_trend=="bear" and direction=="buy":  continue
         hit = (direction=="buy" and low<=level) or (direction=="sell" and high>=level)
@@ -719,17 +720,21 @@ def run_gold_grid(price, high, low, now):
         if "error" in order_result:
             add_log(f"❌ Gold order ebaõnnestus: {order_result['error']}")
             continue
-        # Alles pärast edukat orderit salvesta Supabase-sse
+        # Alles pärast edukat orderit salvesta Supabase-sse.
+        # entry = PÄRIS täitmishind (price), mitte vana pending-tase (level) —
+        # muidu on kõik hilisemad P&L arvutused (TP-kontroll, float-stop,
+        # trendi-pöördumine) selle positsiooni peal valed, kuna order täitub
+        # market order'ina hetkehinnaga, mitte vana level'iga.
         sb_insert("signals", {
-            "direction":direction,"entry":level,"tp":tp,
+            "direction":direction,"entry":price,"tp":tp,
             "sl":sl,
             "lot":lot,"regime":"grid","session":f"gold_{effective_trend}",
             "executed":False,"breakeven":False,"atr":gs,"score":0,"rr":3.0,
             "mt5_ticket": order_result.get("orderId"),
         })
         triggered.append(level_str)
-        add_log(f"📊 Gold order: {direction.upper()} @ {level:.0f}  TP:{tp:.0f} (ticket:{order_result.get('orderId')})")
-        send_telegram(f"📊 <b>Gold Grid Order</b>\n{direction.upper()} @ <b>{level:.0f}</b>\nTP: <b>{tp:.0f}</b> | {effective_trend}")
+        add_log(f"📊 Gold order: {direction.upper()} @ {price:.0f}  TP:{tp:.0f} (ticket:{order_result.get('orderId')})")
+        send_telegram(f"📊 <b>Gold Grid Order</b>\n{direction.upper()} @ <b>{price:.0f}</b>\nTP: <b>{tp:.0f}</b> | {effective_trend}")
 
     for ls in triggered:
         if ls in pending: del pending[ls]
