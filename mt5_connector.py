@@ -189,10 +189,23 @@ def place_order(direction, symbol_name, lot, tp=None, sl=None):
     if result.retcode != mt5.TRADE_RETCODE_DONE:
         return {"error": f"Order ebaõnnestus: {result.retcode} {result.comment}"}
 
-    logger.info(f"✅ MT5 order täidetud: {direction} {lot} {sym} @ {result.price}")
+    # DIAGNOSTIKA: result.price ja result.order on varem tulnud tühjadena (0.0 / 0)
+    # mõne täitmisviisi juures — see võib olla nii eilse "@ 0.0" logi kui ka
+    # Supabase 400 vea (mt5_ticket=0/None) juurpõhjus. Logi kogu tulemus
+    # täielikult, et see järgmine kord näha oleks, ja kasuta fallback'e.
+    fill_price = result.price if result.price else price
+    order_id   = result.order if result.order else result.deal
+    if not result.price or not result.order:
+        logger.warning(
+            f"⚠️ MT5 order tulemus ebatäielik: order={result.order} deal={result.deal} "
+            f"price={result.price} retcode={result.retcode} comment={result.comment!r} "
+            f"— kasutan fallback price={fill_price} orderId={order_id}"
+        )
+
+    logger.info(f"✅ MT5 order täidetud: {direction} {lot} {sym} @ {fill_price} (order={result.order} deal={result.deal})")
     return {
-        "orderId": result.order,
-        "price":   result.price,
+        "orderId": order_id,
+        "price":   fill_price,
         "volume":  result.volume,
     }
 

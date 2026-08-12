@@ -58,7 +58,7 @@ def sb_upsert(table, data):
         h = sb_headers(); h["Prefer"] = "resolution=merge-duplicates"
         r = requests.post(f"{SUPABASE_URL}/rest/v1/{table}", headers=h, json=data, timeout=10)
         if r.status_code not in (200,201):
-            logger.warning(f"SB {table}: {r.status_code}")
+            logger.warning(f"SB {table}: {r.status_code} — {r.text[:500]}")
     except Exception as e:
         logger.error(f"SB upsert: {e}")
 
@@ -66,7 +66,9 @@ def sb_insert(table, data):
     try:
         r = requests.post(f"{SUPABASE_URL}/rest/v1/{table}", headers=sb_headers(), json=data, timeout=10)
         if r.status_code not in (200,201):
-            logger.warning(f"SB insert {table}: {r.status_code}")
+            # Logi PÄRIS veateade (Supabase/PostgREST vastuse sisu), mitte ainult
+            # staatuskoodi — muidu ei tea kunagi, MIKS päring tagasi lükati.
+            logger.warning(f"SB insert {table}: {r.status_code} — {r.text[:500]}")
     except Exception as e:
         logger.error(f"SB insert: {e}")
 
