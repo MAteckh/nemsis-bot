@@ -604,7 +604,7 @@ def run_gold_grid(price, high, low, now):
         save_grid_state({"center":center,"trend":effective_trend,"pending":pending})
         add_log(f"🔲 Gold grid initsialiseeritud @ ${center:.0f} | {effective_trend}")
         # Saada XTrend signaalid käsitsi sisestamiseks
-        send_grid_signals(center, effective_trend, gs, 20.0, 10.0, get_compound_lot(balance))
+        send_grid_signals(center, effective_trend, gs, 30.0, 45.0, get_compound_lot(balance))
         return
 
     pending    = grid_state.get("pending", {})
@@ -616,7 +616,7 @@ def run_gold_grid(price, high, low, now):
         new_c = round(price/gs)*gs
         save_grid_state({"center":new_c,"trend":effective_trend if effective_trend != "neutral" else grid_trend,"pending":setup_grid(new_c, effective_trend if effective_trend != "neutral" else grid_trend)})
         add_log(f"🔄 Grid auto-reset: hind ${price:.0f} kaugel keskusest ${grid_center:.0f}")
-        send_grid_signals(new_c, effective_trend if effective_trend != "neutral" else grid_trend, gs, 20.0, 10.0, get_compound_lot(balance))
+        send_grid_signals(new_c, effective_trend if effective_trend != "neutral" else grid_trend, gs, 30.0, 45.0, get_compound_lot(balance))
         return
 
     if effective_trend != grid_trend and effective_trend != "neutral":
@@ -643,7 +643,7 @@ def run_gold_grid(price, high, low, now):
         new_c = round(price/gs)*gs
         save_grid_state({"center":new_c,"trend":effective_trend,"pending":setup_grid(new_c, effective_trend)})
         add_log(f"🔄 Gold grid reset: {grid_trend}→{effective_trend}")
-        send_grid_signals(new_c, effective_trend, gs, 20.0, 10.0, get_compound_lot(balance))
+        send_grid_signals(new_c, effective_trend, gs, 30.0, 45.0, get_compound_lot(balance))
         return
 
     open_pos = get_gold_positions()
@@ -698,8 +698,8 @@ def run_gold_grid(price, high, low, now):
         # pending-taseme (level) pealt — order on market order, mis täitub
         # kohese turuhinnaga, mis võib vanast level'ist kaugel olla, kui
         # pending tase jäi Supabase'i seisma (nt bot restart vahepeal).
-        tp = round(price + 20.0 if direction=="buy" else price - 20.0, 2)
-        sl = round(price - 10.0 if direction=="buy" else price + 10.0, 2)
+        tp = round(price + 30.0 if direction=="buy" else price - 30.0, 2)
+        sl = round(price - 45.0 if direction=="buy" else price + 45.0, 2)
         # KAITSE 1: max 3 lahtist positsiooni (variant C — backtest +422€/kuu)
         open_now = ct.get_open_positions("XAUUSD")
         if len(open_now) >= 3:
