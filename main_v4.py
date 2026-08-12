@@ -285,6 +285,40 @@ _atr_history = []
 _claude_cache = {"bias": "neutral", "reason": "", "updated": 0}
 _last_order_time = 0
 _trend_history = []  # viimased trendid — vahetus vajab 3x kinnitust
+_price_history = []  # viimased hinnad — külmunud andmevoo tuvastamiseks
+_price_frozen_alerted = False
+
+def check_price_frozen(price, window=10):
+    """
+    Tuvasta kui MT5 hinnavoog on külmunud — kui viimased `window` hinda on
+    kõik täpselt identsed, on see ebatavaline (isegi rahulikul turul liigub
+    kuld iga minuti jooksul vähemalt murdosa senti). Avastati 12.08 päris
+    juhtum: hind jäi täpselt samaks ~56 järjestikust scanni (~56 min).
+    Saadab Telegram-hoiatuse ainult üks kord episoodi kohta, mitte iga scanni.
+    Tagastab True kui hind on külmunud (kaubeldamine tuleks vahele jätta).
+    """
+    global _price_history, _price_frozen_alerted
+    _price_history.append(price)
+    if len(_price_history) > window:
+        _price_history.pop(0)
+
+    if len(_price_history) < window:
+        return False
+
+    frozen = all(p == _price_history[0] for p in _price_history)
+
+    if frozen and not _price_frozen_alerted:
+        add_log(f"🧊 HOIATUS: hind ${price:.2f} pole muutunud {window} järjestikuse scanni jooksul — MT5 andmevoog võib olla külmunud")
+        send_telegram(
+            f"🧊 <b>Hinnavoog võib olla külmunud</b>\n"
+            f"Gold hind ${price:.2f} pole muutunud {window} scanni jooksul.\n"
+            f"Kontrolli MT5 ühendust VPS-il — kauplemine on peatatud, kuni hind uuesti liigub."
+        )
+        _price_frozen_alerted = True
+    elif not frozen:
+        _price_frozen_alerted = False
+
+    return frozen
 
 def get_trend(df):
     period = GRID_CONFIG["trend_period"]
@@ -901,20 +935,23 @@ def main():
                         price_gold = get_price("XAU/USD")
                         retry += 1
                     if price_gold > 0:
-                        # Gold grid ei vaja BB/RSI — ainult hind ja trend
-                        # high/low: kasuta ±0.5% hinnast kui df puudub
-                        df_gold = get_data("XAU/USD")
-                        if df_gold is not None and len(df_gold) > 2:
-                            # Kasuta viimase 2 küünla high/low — katab ~2h liikumise
-                            # nii ei jää grid tabamised vahele 15min scannil
-                            high_gold = float(df_gold["high"].iloc[-2:].max())
-                            low_gold  = float(df_gold["low"].iloc[-2:].min())
+                        if check_price_frozen(price_gold):
+                            add_log(f"🧊 Hind endiselt külmunud ${price_gold:.2f} — kauplemine peatatud")
                         else:
-                            # Fallback: kasuta ±0.5% hinnast
-                            high_gold = round(price_gold * 1.005, 2)
-                            low_gold  = round(price_gold * 0.995, 2)
-                        add_log(f"🥇 Gold: ${price_gold:.2f}")
-                        run_gold_grid(price_gold, high_gold, low_gold, now)
+                            # Gold grid ei vaja BB/RSI — ainult hind ja trend
+                            # high/low: kasuta ±0.5% hinnast kui df puudub
+                            df_gold = get_data("XAU/USD")
+                            if df_gold is not None and len(df_gold) > 2:
+                                # Kasuta viimase 2 küünla high/low — katab ~2h liikumise
+                                # nii ei jää grid tabamised vahele 15min scannil
+                                high_gold = float(df_gold["high"].iloc[-2:].max())
+                                low_gold  = float(df_gold["low"].iloc[-2:].min())
+                            else:
+                                # Fallback: kasuta ±0.5% hinnast
+                                high_gold = round(price_gold * 1.005, 2)
+                                low_gold  = round(price_gold * 0.995, 2)
+                            add_log(f"🥇 Gold: ${price_gold:.2f}")
+                            run_gold_grid(price_gold, high_gold, low_gold, now)
                     else:
                         add_log("⚠️ Gold: hind puudub cTrader-ist")
                 except Exception as e:
