@@ -6,6 +6,8 @@ Strateegiad:
 - XAUUSD: Trend-Aware Grid (kuld)
 - AUDCAD, AUDNZD, EURGBP, EURCHF, NZDCAD: Mean Reversion
 """
+from dotenv import load_dotenv
+load_dotenv()
 import sys, os, json, time, logging, requests
 from datetime import datetime, timezone
 import pandas as pd
@@ -56,7 +58,7 @@ def sb_upsert(table, data):
         h = sb_headers(); h["Prefer"] = "resolution=merge-duplicates"
         r = requests.post(f"{SUPABASE_URL}/rest/v1/{table}", headers=h, json=data, timeout=10)
         if r.status_code not in (200,201):
-            logger.warning(f"SB {table}: {r.status_code}")
+            logger.warning(f"SB {table}: {r.status_code} — {r.text[:500]}")
     except Exception as e:
         logger.error(f"SB upsert: {e}")
 
@@ -64,7 +66,9 @@ def sb_insert(table, data):
     try:
         r = requests.post(f"{SUPABASE_URL}/rest/v1/{table}", headers=sb_headers(), json=data, timeout=10)
         if r.status_code not in (200,201):
-            logger.warning(f"SB insert {table}: {r.status_code}")
+            # Logi PÄRIS veateade (Supabase/PostgREST vastuse sisu), mitte ainult
+            # staatuskoodi — muidu ei tea kunagi, MIKS päring tagasi lükati.
+            logger.warning(f"SB insert {table}: {r.status_code} — {r.text[:500]}")
     except Exception as e:
         logger.error(f"SB insert: {e}")
 
@@ -281,6 +285,40 @@ _atr_history = []
 _claude_cache = {"bias": "neutral", "reason": "", "updated": 0}
 _last_order_time = 0
 _trend_history = []  # viimased trendid — vahetus vajab 3x kinnitust
+_price_history = []  # viimased hinnad — külmunud andmevoo tuvastamiseks
+_price_frozen_alerted = False
+
+def check_price_frozen(price, window=10):
+    """
+    Tuvasta kui MT5 hinnavoog on külmunud — kui viimased `window` hinda on
+    kõik täpselt identsed, on see ebatavaline (isegi rahulikul turul liigub
+    kuld iga minuti jooksul vähemalt murdosa senti). Avastati 12.08 päris
+    juhtum: hind jäi täpselt samaks ~56 järjestikust scanni (~56 min).
+    Saadab Telegram-hoiatuse ainult üks kord episoodi kohta, mitte iga scanni.
+    Tagastab True kui hind on külmunud (kaubeldamine tuleks vahele jätta).
+    """
+    global _price_history, _price_frozen_alerted
+    _price_history.append(price)
+    if len(_price_history) > window:
+        _price_history.pop(0)
+
+    if len(_price_history) < window:
+        return False
+
+    frozen = all(p == _price_history[0] for p in _price_history)
+
+    if frozen and not _price_frozen_alerted:
+        add_log(f"🧊 HOIATUS: hind ${price:.2f} pole muutunud {window} järjestikuse scanni jooksul — MT5 andmevoog võib olla külmunud")
+        send_telegram(
+            f"🧊 <b>Hinnavoog võib olla külmunud</b>\n"
+            f"Gold hind ${price:.2f} pole muutunud {window} scanni jooksul.\n"
+            f"Kontrolli MT5 ühendust VPS-il — kauplemine on peatatud, kuni hind uuesti liigub."
+        )
+        _price_frozen_alerted = True
+    elif not frozen:
+        _price_frozen_alerted = False
+
+    return frozen
 
 def get_trend(df):
     period = GRID_CONFIG["trend_period"]
@@ -311,8 +349,8 @@ def get_vol_mult():
     return GRID_CONFIG["vol_boost"] if cur > avg*GRID_CONFIG["vol_thresh"] else 1.0
 
 def get_compound_lot(balance):
-    base = round(max(0.01, (balance/ACCOUNT_BALANCE)*0.01), 3)
-    return round(base * get_vol_mult(), 3)
+    base = round(max(0.01, (balance/ACCOUNT_BALANCE)*0.01), 2)
+    return round(base * get_vol_mult(), 2)
 
 def get_scaled_max_float(balance):
     """Max floating loss skaleerub koos kontoga."""
@@ -393,6 +431,7 @@ def sync_mt5_positions():
         if not sb_open:
             return mt5_tickets
 
+        closed_found = False
         for pos in sb_open:
             ticket = pos.get("mt5_ticket")
             if ticket is None:
@@ -401,6 +440,18 @@ def sync_mt5_positions():
                 # MT5-s suletud aga Supabase-s lahti — märgi suletuks
                 sb_upsert("signals", {"id": pos["id"], "executed": True})
                 add_log(f"🔄 Sync: positsioon {ticket} suletud MT5 poolt → Supabase uuendatud")
+                closed_found = True
+
+        if closed_found:
+            # Positsioon suleti broker'i enda TP/SL kaudu, enne kui bot ise jõudis
+            # seda tuvastada — see haru ei arvutanud kunagi P&L-i balance'ile.
+            # Sünkroniseeri balance otse päris MT5 kontoseisuga (juba kasutuses
+            # ja tõestatud get_balance() funktsioonis), et dashboard ei jääks
+            # vananenud numbrit näitama.
+            real_balance = ct.get_account_balance()
+            if real_balance and real_balance > 0:
+                sb_upsert("bot_state", {"id": 1, "balance": round(float(real_balance), 2)})
+                add_log(f"🔄 Sync: balance uuendatud päris MT5 väärtusega {real_balance:.2f}€")
 
         return mt5_tickets
     except Exception as e:
@@ -485,24 +536,72 @@ def send_grid_signals(center, trend, gs, tp_dist, sl_dist, lot):
     lines.append("💡 Testiks pane esmalt 1 order, vaata et täitub, siis ülejäänud.")
     send_telegram("\n".join(lines))
 
-_day_start_equity = {"day": "", "equity": 0.0}
+def get_daily_halt_state():
+    rows = sb_select("bot_state", "id=eq.1&select=risk")
+    if rows and rows[0].get("risk") and "daily_gold_halt" in rows[0]["risk"]:
+        return rows[0]["risk"]["daily_gold_halt"]
+    return {"day": "", "equity": 0.0}
+
+def save_daily_halt_state(state):
+    try:
+        rows = sb_select("bot_state", "id=eq.1&select=risk")
+        risk = rows[0].get("risk", {}) if rows else {}
+        risk["daily_gold_halt"] = state
+        sb_upsert("bot_state", {"id": 1, "risk": risk})
+    except Exception as e:
+        logger.error(f"save_daily_halt: {e}")
 
 def check_daily_equity_halt():
-    """Peata kauplemine kui päeva equity kahjum > 10%."""
-    global _day_start_equity
+    """
+    Peata kulla kauplemine kui päeva equity kahjum > 10%.
+    Olek salvestatakse Supabase's (mitte mälu-globaalis), et püsiks
+    bot restardi üle — varem lähtestus see iga restardiga, mis
+    nõrgendas kaitset vaikselt just siis kui restart toimus halval päeval.
+    """
     eq = ct.get_account_equity()
     if not eq: return False
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    if _day_start_equity["day"] != today:
-        _day_start_equity = {"day": today, "equity": eq}
+    state = get_daily_halt_state()
+    if state.get("day") != today:
+        state = {"day": today, "equity": eq}
+        save_daily_halt_state(state)
         return False
-    start = _day_start_equity["equity"]
+    start = state.get("equity", 0)
     if start > 0 and (start - eq) / start > 0.10:
         add_log(f"🛑 PÄEVALIMIIT: equity {eq:.2f} on -10% päeva algusest {start:.2f} — kauplemine peatatud")
         return True
     return False
 
 def run_gold_grid(price, high, low, now):
+    # ── NÄDALAVAHETUS — reede 21:00 UTC sulge kõik, lau/püha ei kauple üldse ──
+    # (sama muster mis strategy_meanrev.py-s forexile juba olemas —
+    #  kuld seda seni ei omanud, mis põhjustas SL-tabamusi nädalavahetuse
+    #  gap/thin-liquidity liikumisest)
+    if now.weekday() == 4 and now.hour >= 21:
+        open_pos = get_gold_positions()
+        if open_pos:
+            balance = get_balance()
+            for pos in open_pos:
+                entry = float(pos.get("entry", 0))
+                d     = pos.get("direction", "buy")
+                lot   = get_compound_lot(balance)
+                fl    = (price-entry)*lot*100 if d == "buy" else (entry-price)*lot*100
+                ticket = pos.get("mt5_ticket")
+                close_ok = True
+                if ticket:
+                    close_ok = ct.close_position(int(ticket))
+                    if not close_ok:
+                        add_log(f"⚠️ Weekend sulgemine: MT5 positsioon {ticket} sulgemine ebaõnnestus")
+                if close_ok:
+                    balance = round(balance+fl, 2)
+                    sb_upsert("signals", {"id": pos["id"], "executed": True})
+                    sb_upsert("bot_state", {"id": 1, "balance": balance})
+            add_log(f"🔒 Gold weekend sulgemine — {len(open_pos)} positsiooni suletud")
+            send_telegram(f"🔒 <b>Gold weekend sulgemine</b>\n{len(open_pos)} positsiooni suletud enne nädalavahetust")
+        return
+    if now.weekday() in (5, 6):
+        return
+
     if check_daily_equity_halt(): return
     cfg    = INSTRUMENTS["XAUUSD"]
     gs     = cfg["grid_size"]
@@ -562,7 +661,18 @@ def run_gold_grid(price, high, low, now):
             entry = float(pos.get("entry",0))
             d     = pos.get("direction","buy")
             fl    = (price-entry)*get_compound_lot(balance)*100 if d=="buy" else (entry-price)*get_compound_lot(balance)*100
-            if fl < 0:
+            # Sulge PÄRIS MT5 positsioon ENNE Supabase uuendust — KÕIK vastutrendi
+            # positsioonid (kaotuses JA kasumis). Backtest (30 juhuslikku hinnateed)
+            # näitas seda paremaks kui ainult kaotuses olevate sulgemist: kasumis
+            # positsioon jäetuna lahti samasse vastutrendi, mis kaotusi tekitab,
+            # ei ole reaalselt kaitstud kasum, vaid ohus paberkasum.
+            ticket = pos.get("mt5_ticket")
+            close_ok = True
+            if ticket:
+                close_ok = ct.close_position(int(ticket))
+                if not close_ok:
+                    add_log(f"⚠️ Trend reset: MT5 positsioon {ticket} sulgemine ebaõnnestus — proovin uuesti järgmisel scannil")
+            if close_ok:
                 balance = round(balance+fl, 2)
                 sb_upsert("signals", {"id":pos["id"],"executed":True})
                 sb_upsert("bot_state", {"id":1,"balance":balance})
@@ -598,18 +708,21 @@ def run_gold_grid(price, high, low, now):
         if fl < -get_scaled_max_float(balance):
             # Sulge PÄRIS MT5 positsioon
             ticket = pos.get("mt5_ticket")
+            close_ok = True
             if ticket:
-                closed = ct.close_position(int(ticket))
-                if not closed:
-                    add_log(f"⚠️ Float stop: MT5 positsioon {ticket} sulgemine ebaõnnestus!")
-            balance = round(balance+fl, 2)
-            sb_upsert("signals", {"id":pid,"executed":True})
-            sb_upsert("bot_state", {"id":1,"balance":balance})
-            add_log(f"🛡 Gold float stop: {d.upper()} @ {entry:.0f}  {fl:+.2f}€")
+                close_ok = ct.close_position(int(ticket))
+                if not close_ok:
+                    add_log(f"⚠️ Float stop: MT5 positsioon {ticket} sulgemine ebaõnnestus — proovin uuesti järgmisel scannil")
+            if close_ok:
+                balance = round(balance+fl, 2)
+                sb_upsert("signals", {"id":pid,"executed":True})
+                sb_upsert("bot_state", {"id":1,"balance":balance})
+                add_log(f"🛡 Gold float stop: {d.upper()} @ {entry:.0f}  {fl:+.2f}€")
 
     triggered = []
     for level_str, direction in list(pending.items()):
         level = float(level_str)
+        if effective_trend == "neutral": continue
         if effective_trend=="bull" and direction=="sell": continue
         if effective_trend=="bear" and direction=="buy":  continue
         hit = (direction=="buy" and low<=level) or (direction=="sell" and high>=level)
@@ -617,8 +730,12 @@ def run_gold_grid(price, high, low, now):
         same = [p for p in get_gold_positions() if p.get("direction")==direction]
         if len(same) >= gl: continue
         lot = get_compound_lot(balance)
-        tp = round(level + 30.0 if direction=="buy" else level - 30.0, 2)
-        sl = round(level - 45.0 if direction=="buy" else level + 45.0, 2)
+        # TP/SL arvutatakse PÄRIS hetkehinna (price) pealt, mitte vana
+        # pending-taseme (level) pealt — order on market order, mis täitub
+        # kohese turuhinnaga, mis võib vanast level'ist kaugel olla, kui
+        # pending tase jäi Supabase'i seisma (nt bot restart vahepeal).
+        tp = round(price + 30.0 if direction=="buy" else price - 30.0, 2)
+        sl = round(price - 45.0 if direction=="buy" else price + 45.0, 2)
         # KAITSE 1: max 3 lahtist positsiooni (variant C — backtest +422€/kuu)
         open_now = ct.get_open_positions("XAUUSD")
         if len(open_now) >= 3:
@@ -639,17 +756,21 @@ def run_gold_grid(price, high, low, now):
         if "error" in order_result:
             add_log(f"❌ Gold order ebaõnnestus: {order_result['error']}")
             continue
-        # Alles pärast edukat orderit salvesta Supabase-sse
+        # Alles pärast edukat orderit salvesta Supabase-sse.
+        # entry = PÄRIS täitmishind (price), mitte vana pending-tase (level) —
+        # muidu on kõik hilisemad P&L arvutused (TP-kontroll, float-stop,
+        # trendi-pöördumine) selle positsiooni peal valed, kuna order täitub
+        # market order'ina hetkehinnaga, mitte vana level'iga.
         sb_insert("signals", {
-            "direction":direction,"entry":level,"tp":tp,
+            "direction":direction,"entry":price,"tp":tp,
             "sl":sl,
             "lot":lot,"regime":"grid","session":f"gold_{effective_trend}",
             "executed":False,"breakeven":False,"atr":gs,"score":0,"rr":3.0,
             "mt5_ticket": order_result.get("orderId"),
         })
         triggered.append(level_str)
-        add_log(f"📊 Gold order: {direction.upper()} @ {level:.0f}  TP:{tp:.0f} (ticket:{order_result.get('orderId')})")
-        send_telegram(f"📊 <b>Gold Grid Order</b>\n{direction.upper()} @ <b>{level:.0f}</b>\nTP: <b>{tp:.0f}</b> | {effective_trend}")
+        add_log(f"📊 Gold order: {direction.upper()} @ {price:.0f}  TP:{tp:.0f} (ticket:{order_result.get('orderId')})")
+        send_telegram(f"📊 <b>Gold Grid Order</b>\n{direction.upper()} @ <b>{price:.0f}</b>\nTP: <b>{tp:.0f}</b> | {effective_trend}")
 
     for ls in triggered:
         if ls in pending: del pending[ls]
@@ -673,34 +794,39 @@ def run_gold_grid(price, high, low, now):
                     lot_scalp = round(round(max(0.01, (balance/ACCOUNT_BALANCE)*0.01) / 0.01) * 0.01, 2)
 
                     if effective_trend == "bull" and l5 < price - 5:
-                        tp_scalp = round(l5 + 10, 2)
-                        sl_scalp = round(l5 - 15, 2)
+                        # TP/SL arvutatakse PÄRIS hetkehinna (price) pealt, mitte vana
+                        # l5 (5min madalpunkt) pealt — order on market order, mis täitub
+                        # kohese turuhinnaga, mistõttu vana l5-põhine TP oli tihti juba
+                        # peaaegu käes enne kui order üldse täitus (nt +0,90€ 18 sek pärast).
+                        tp_scalp = round(price + 10, 2)
+                        sl_scalp = round(price - 15, 2)
                         scalp_result = ct.place_order("buy", "XAUUSD", lot_scalp, tp=tp_scalp, sl=sl_scalp)
                         if "error" not in scalp_result:
                             sb_insert("signals", {
-                                "direction":"buy","entry":round(l5,2),"tp":tp_scalp,
+                                "direction":"buy","entry":round(price,2),"tp":tp_scalp,
                                 "sl":sl_scalp,"lot":lot_scalp,"regime":"grid",
                                 "session":"scalp_bull","executed":False,"breakeven":False,
                                 "atr":range5,"score":1,"rr":0.67,
                                 "mt5_ticket": scalp_result.get("orderId"),
                             })
-                            add_log(f"⚡ Scalp BUY @ {l5:.0f} TP:{tp_scalp:.0f}")
+                            add_log(f"⚡ Scalp BUY @ {price:.0f} TP:{tp_scalp:.0f}")
                         else:
                             add_log(f"❌ Scalp BUY ebaõnnestus: {scalp_result['error']}")
 
                     elif effective_trend == "bear" and h5 > price + 5:
-                        tp_scalp = round(h5 - 10, 2)
-                        sl_scalp = round(h5 + 15, 2)
+                        # Sama parandus mis BUY harus — price, mitte vana h5
+                        tp_scalp = round(price - 10, 2)
+                        sl_scalp = round(price + 15, 2)
                         scalp_result = ct.place_order("sell", "XAUUSD", lot_scalp, tp=tp_scalp, sl=sl_scalp)
                         if "error" not in scalp_result:
                             sb_insert("signals", {
-                                "direction":"sell","entry":round(h5,2),"tp":tp_scalp,
+                                "direction":"sell","entry":round(price,2),"tp":tp_scalp,
                                 "sl":sl_scalp,"lot":lot_scalp,"regime":"grid",
                                 "session":"scalp_bear","executed":False,"breakeven":False,
                                 "atr":range5,"score":1,"rr":0.67,
                                 "mt5_ticket": scalp_result.get("orderId"),
                             })
-                            add_log(f"⚡ Scalp SELL @ {h5:.0f} TP:{tp_scalp:.0f}")
+                            add_log(f"⚡ Scalp SELL @ {price:.0f} TP:{tp_scalp:.0f}")
                         else:
                             add_log(f"❌ Scalp SELL ebaõnnestus: {scalp_result['error']}")
     except Exception as e:
@@ -809,20 +935,23 @@ def main():
                         price_gold = get_price("XAU/USD")
                         retry += 1
                     if price_gold > 0:
-                        # Gold grid ei vaja BB/RSI — ainult hind ja trend
-                        # high/low: kasuta ±0.5% hinnast kui df puudub
-                        df_gold = get_data("XAU/USD")
-                        if df_gold is not None and len(df_gold) > 2:
-                            # Kasuta viimase 2 küünla high/low — katab ~2h liikumise
-                            # nii ei jää grid tabamised vahele 15min scannil
-                            high_gold = float(df_gold["high"].iloc[-2:].max())
-                            low_gold  = float(df_gold["low"].iloc[-2:].min())
+                        if check_price_frozen(price_gold):
+                            add_log(f"🧊 Hind endiselt külmunud ${price_gold:.2f} — kauplemine peatatud")
                         else:
-                            # Fallback: kasuta ±0.5% hinnast
-                            high_gold = round(price_gold * 1.005, 2)
-                            low_gold  = round(price_gold * 0.995, 2)
-                        add_log(f"🥇 Gold: ${price_gold:.2f}")
-                        run_gold_grid(price_gold, high_gold, low_gold, now)
+                            # Gold grid ei vaja BB/RSI — ainult hind ja trend
+                            # high/low: kasuta ±0.5% hinnast kui df puudub
+                            df_gold = get_data("XAU/USD")
+                            if df_gold is not None and len(df_gold) > 2:
+                                # Kasuta viimase 2 küünla high/low — katab ~2h liikumise
+                                # nii ei jää grid tabamised vahele 15min scannil
+                                high_gold = float(df_gold["high"].iloc[-2:].max())
+                                low_gold  = float(df_gold["low"].iloc[-2:].min())
+                            else:
+                                # Fallback: kasuta ±0.5% hinnast
+                                high_gold = round(price_gold * 1.005, 2)
+                                low_gold  = round(price_gold * 0.995, 2)
+                            add_log(f"🥇 Gold: ${price_gold:.2f}")
+                            run_gold_grid(price_gold, high_gold, low_gold, now)
                     else:
                         add_log("⚠️ Gold: hind puudub cTrader-ist")
                 except Exception as e:
