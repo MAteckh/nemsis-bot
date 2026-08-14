@@ -84,7 +84,8 @@ header::after{content:'';position:absolute;bottom:0;left:0;right:0;height:1px;
 .sv{color:var(--gold2);font-size:11px;min-width:55px;text-align:right;font-weight:600}
 
 .stats{display:grid;grid-template-columns:repeat(2,1fr);gap:1px;background:var(--bordergold)}
-@media(min-width:560px){.stats{grid-template-columns:repeat(4,1fr)}}
+@media(min-width:560px){.stats{grid-template-columns:repeat(3,1fr)}}
+@media(min-width:780px){.stats{grid-template-columns:repeat(5,1fr)}}
 .sc{background:var(--bg1);padding:16px 20px;position:relative;overflow:hidden;transition:background .2s}
 .sc:hover{background:var(--bg2)}
 .sc::before{content:'';position:absolute;top:0;left:0;right:0;height:1.5px;animation:gold-bar 2.5s ease-in-out infinite}
@@ -144,6 +145,9 @@ tr:hover td{background:rgba(201,168,76,.015)}
 .tbuy{color:var(--green)}
 .tsell{color:var(--red)}
 .ttp{color:var(--gold2)}
+.tsl{color:var(--red)}
+.tpl-pos{color:var(--green)}
+.tpl-neg{color:var(--red)}
 .tsym{font-family:var(--fo);font-size:10px;font-weight:700;color:var(--gold2)}
 
 .sg{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--border)}
@@ -207,6 +211,7 @@ footer{display:flex;justify-content:space-between;align-items:center;flex-wrap:w
 
 <div class="stats">
   <div class="sc cg"><div class="sbg">$∞</div><div class="slbl">Balance</div><div class="sval cg" id="bal">—</div><div class="ssub" id="ls">—</div></div>
+  <div class="sc cp"><div class="slbl">Equity</div><div class="sval cp" id="eq">—</div><div class="ssub" id="eqd">floating P&amp;L</div></div>
   <div class="sc cn"><div class="slbl">Kasv algusest</div><div class="sval cn" id="gr">—</div><div class="ssub">algkapital 200€</div></div>
   <div class="sc cgr"><div class="slbl">Gold pos</div><div class="sval cgr" id="gp">—</div><div class="ssub">XAUUSD grid</div></div>
   <div class="sc cg"><div class="slbl">Gold hind</div><div class="sval cg" id="gpr">—</div><div class="ssub" id="gt">—</div></div>
@@ -237,8 +242,8 @@ footer{display:flex;justify-content:space-between;align-items:center;flex-wrap:w
 </div>
 <div class="tw">
   <table>
-    <thead><tr><th>Symbol</th><th>Direction</th><th>Entry</th><th>Target</th><th>Lot</th><th>Strategy</th><th>TF</th></tr></thead>
-    <tbody id="pb"><tr><td colspan="7" class="nd">No active targets</td></tr></tbody>
+    <thead><tr><th>Symbol</th><th>Direction</th><th>Entry</th><th>Target</th><th>SL</th><th>P&amp;L</th><th>Lot</th><th>Strategy</th><th>TF</th></tr></thead>
+    <tbody id="pb"><tr><td colspan="9" class="nd">No active targets</td></tr></tbody>
   </table>
 </div>
 
@@ -309,6 +314,14 @@ async function load(){
     const s=sa[0]||{},st=s.stats||{},logs=s.log||[],bal=+(st.balance||s.balance||0)
     document.getElementById('bal').textContent=bal?bal.toFixed(2)+'€':'—'
     document.getElementById('ls').textContent=s.last_scan||'—'
+    // EQUITY — balance + lahtiste positsioonide floating P&L (backend arvutab)
+    const eq=st.equity!=null?+st.equity:bal
+    const eqEl=document.getElementById('eq')
+    eqEl.textContent=eq?eq.toFixed(2)+'€':'—'
+    const eqDiff=eq-bal
+    const eqdEl=document.getElementById('eqd')
+    if(Math.abs(eqDiff)>0.01){eqdEl.textContent=(eqDiff>=0?'+':'')+eqDiff.toFixed(2)+'€ floating';eqdEl.style.color=eqDiff>=0?'var(--green)':'var(--red)'}
+    else{eqdEl.textContent='floating P&L';eqdEl.style.color='var(--text3)'}
     const g=bal?((bal-S0)/S0*100):0
     const ge=document.getElementById('gr');ge.textContent=(g>=0?'+':'')+g.toFixed(1)+'%';ge.style.color=g>=0?'var(--cyan)':'var(--red)'
     document.getElementById('gpr').textContent=st.price?'$'+parseFloat(st.price).toFixed(2):'—'
@@ -332,8 +345,19 @@ async function load(){
       return`<div class="ic ${isG?'ig':'if'}"><div class="iname" style="color:${isG?'var(--gold2)':'var(--text)'}">${info.n}</div><div class="istrat">${info.s} · ${info.tf}</div><div style="display:flex;justify-content:space-between;align-items:center;margin:6px 0 8px"><span class="badge ${bc}">${trend.toUpperCase()}</span></div><div class="iprice" style="color:${isG?'var(--gold2)':'var(--text)'}">${price}</div><div class="ifoot"><span style="color:var(--text3)">POS</span><strong style="color:var(--green)">${sp}</strong></div></div>`
     }).join('')
     const pb=document.getElementById('pb'),gposOnly=gpos
-    if(!gposOnly||!gposOnly.length){pb.innerHTML='<tr><td colspan="7" class="nd">No active targets</td></tr>'}
-    else pb.innerHTML=gposOnly.map(p=>{const sym=p.regime==='grid'?'XAUUSD':(p.session||'—');const info=I[sym]||{tf:'—',s:'—'};const isG=p.regime==='grid';const fmt=v=>isG?parseFloat(v||0).toFixed(2):parseFloat(v||0).toFixed(5);return`<tr><td class="tsym">${sym}</td><td class="${p.direction==='buy'?'tbuy':'tsell'}">${p.direction==='buy'?'▲ BUY':'▼ SELL'}</td><td>${fmt(p.entry)}</td><td class="ttp">${fmt(p.tp)}</td><td style="color:var(--text2)">${p.lot||'0.01'}</td><td style="color:var(--text3)">${info.s}</td><td style="color:var(--blue)">${info.tf}</td></tr>`}).join('')
+    if(!gposOnly||!gposOnly.length){pb.innerHTML='<tr><td colspan="9" class="nd">No active targets</td></tr>'}
+    else pb.innerHTML=gposOnly.map(p=>{
+      const sym=p.regime==='grid'?'XAUUSD':(p.session||'—');const info=I[sym]||{tf:'—',s:'—'};const isG=p.regime==='grid';const fmt=v=>isG?parseFloat(v||0).toFixed(2):parseFloat(v||0).toFixed(5)
+      // Hetke floating P&L (hinnavahe, mitte veel euros) — arvutatud kliendi poolel
+      // praeguse gold hinna (st.price) ja positsiooni entry/suuna pealt.
+      let plTxt='—',plCls=''
+      if(isG&&st.price&&p.entry){
+        const diff=p.direction==='buy'?(+st.price-+p.entry):(+p.entry-+st.price)
+        plTxt=(diff>=0?'+':'')+diff.toFixed(2)
+        plCls=diff>=0?'tpl-pos':'tpl-neg'
+      }
+      return`<tr><td class="tsym">${sym}</td><td class="${p.direction==='buy'?'tbuy':'tsell'}">${p.direction==='buy'?'▲ BUY':'▼ SELL'}</td><td>${fmt(p.entry)}</td><td class="ttp">${fmt(p.tp)}</td><td class="tsl">${p.sl?fmt(p.sl):'—'}</td><td class="${plCls}">${plTxt}</td><td style="color:var(--text2)">${p.lot||'0.01'}</td><td style="color:var(--text3)">${info.s}</td><td style="color:var(--blue)">${info.tf}</td></tr>`
+    }).join('')
     const lw=document.getElementById('lw')
     if(logs.length)lw.innerHTML=[...logs].reverse().map(l=>{let c='';if(l.includes('✅'))c='tp';else if(l.includes('❌')||l.includes('ERROR'))c='er';else if(l.includes('🤖')||l.includes('Claude'))c='ai';else if(l.includes('⚡'))c='sc';else if(l.includes('💱')||l.includes('🥇'))c='pr';const pt=l.split('  ');return`<div class="ll"><span class="lt">${pt[0]||''}</span><span class="lm ${c}">${pt.slice(1).join('  ')}</span></div>`}).join('')
     document.getElementById('ft').textContent='LAST SCAN: '+new Date().toLocaleTimeString('et-EE')+' UTC'
