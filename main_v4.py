@@ -91,6 +91,64 @@ def send_telegram(text):
     except Exception as e:
         logger.warning(f"Telegram: {e}")
 
+_last_telegram_update_id = 0
+
+def check_telegram_commands():
+    """
+    Kontrolli Telegramis uusi sõnumeid — võimaldab kaugjuhtimisega
+    kauplemise taasalustamist otse telefonist, ilma arvutit avamata.
+    AINULT konfigureeritud TELEGRAM_CHAT_ID-st tulevad käsud arvestatakse.
+
+    /reset või /resume — eemaldab nii circuit breaker'i kui päevalimiidi
+                          peatuse, kaupleb kohe jälle edasi
+    /status             — saadab hetke balance + equity
+    Kaitsemehhanismid ise (circuit breaker, päevalimiit) jäävad täielikult
+    alles — see ainult annab mugava viisi neid vajadusel käsitsi lähtestada.
+    """
+    global _last_telegram_update_id
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+        return
+    try:
+        r = requests.get(
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates",
+            params={"offset": _last_telegram_update_id + 1, "timeout": 0},
+            timeout=10
+        )
+        if r.status_code != 200:
+            return
+        updates = r.json().get("result", [])
+        for upd in updates:
+            _last_telegram_update_id = max(_last_telegram_update_id, upd["update_id"])
+            msg = upd.get("message", {})
+            chat_id = str(msg.get("chat", {}).get("id", ""))
+            text = (msg.get("text") or "").strip().lower()
+
+            if chat_id != str(TELEGRAM_CHAT_ID):
+                continue  # ignoreeri kõiki teisi saatjaid
+
+            if text in ("/reset", "/resume"):
+                rows = sb_select("bot_state", "id=eq.1&select=risk")
+                risk = rows[0].get("risk", {}) if rows else {}
+                had_pause = bool(risk.get("circuit", {}).get("paused_until_day") or
+                                  risk.get("circuit", {}).get("paused_until_week") or
+                                  risk.get("daily_gold_halt"))
+                risk.pop("circuit", None)
+                risk.pop("daily_gold_halt", None)
+                sb_upsert("bot_state", {"id": 1, "risk": risk})
+                if had_pause:
+                    send_telegram("✅ Kauplemine taasalustatud — kõik pausid (circuit breaker, päevalimiit) eemaldatud.")
+                    add_log("🔓 Kaugjuhtimisega reset tehtud Telegrami käsuga")
+                else:
+                    send_telegram("ℹ️ Ühtegi aktiivset pausi ei leitud — bot juba kaupleb.")
+
+            elif text == "/status":
+                bal = get_balance()
+                eq  = get_account_equity()
+                send_telegram(f"📊 <b>Staatus</b>\nBalance: {bal:.2f}€\nEquity: {eq:.2f}€")
+
+    except Exception as e:
+        logger.error(f"Telegram commands check: {e}")
+
 def get_balance():
     mt5_balance = ct.get_account_balance()
     if mt5_balance and mt5_balance > 0:
@@ -914,6 +972,12 @@ def main():
             now = datetime.now(timezone.utc)
             add_log(f"⏱ Scan #{scan_count} — {now.strftime('%H:%M')} UTC")
 
+            # ── TELEGRAM KAUGKÄSUD (/reset, /status) ──
+            # Kontrolli ENNE circuit breaker'it — muidu ei jõuaks /reset
+            # käsk kunagi kohale, kui bot on juba pausil (continue allpool
+            # katkestaks selle scanni enne käsu kontrollimist).
+            check_telegram_commands()
+
             # ── CIRCUIT BREAKER KONTROLL ──
             balance = get_balance()
             if not check_circuit_breaker(balance, now):
@@ -977,9 +1041,27 @@ def main():
 
             # Dashboard uuendus
             balance = get_balance()
+            equity  = get_account_equity()
             open_all = sb_select("signals", "executed=eq.false")
             gold_pos  = [p for p in open_all if p.get("regime")=="grid"]
             forex_pos = [p for p in open_all if p.get("regime")=="meanrev"]
+
+            # Detailne positsioonide nimekiri dashboard'i jaoks — päris
+            # entry/TP/SL/suund + hetke floating vahe, mitte ainult arv.
+            positions_detail = []
+            for p in gold_pos:
+                entry = float(p.get("entry", 0) or 0)
+                direction = p.get("direction", "buy")
+                floating = (price_gold - entry) if direction == "buy" else (entry - price_gold)
+                positions_detail.append({
+                    "direction":     direction,
+                    "entry":         entry,
+                    "tp":            p.get("tp"),
+                    "sl":            p.get("sl"),
+                    "floating_diff": round(floating, 2),
+                    "mt5_ticket":    p.get("mt5_ticket"),
+                    "session":       p.get("session"),
+                })
 
             sb_upsert("bot_state", {
                 "id": 1, "updated_at": now.isoformat(),
@@ -987,8 +1069,10 @@ def main():
                 "log": log_buffer[-30:],
                 "stats": {
                     "balance":         balance,
+                    "equity":          round(equity, 2) if equity else balance,
                     "gold_positions":  len(gold_pos),
                     "forex_positions": len(forex_pos),
+                    "positions_detail": positions_detail,
                     "scan":            scan_count,
                     "claude_bias":     _claude_cache.get("bias", "neutral"),
                     "claude_reason":   _claude_cache.get("reason", ""),
