@@ -9,7 +9,7 @@ INSTRUMENTS = {
         "strategy":     "grid",
         "lot":          0.01,
         "grid_size":    15.0,
-        "trend_thresh": 0.1,
+        "trend_thresh": 0.3,
         "pip_value":    100,
         "symbol_td":    "XAU/USD",
         "interval":     "1h",
@@ -169,4 +169,9 @@ GRID_CONFIG = {
     "trend_period": 10,
     "vol_thresh":  1.3,
     "vol_boost":   1.5,
+    # Lot suuruse ülempiir compounding jaoks (get_compound_lot()). Varem
+    # polnud piiri üldse — lot kasvas piiramatult balance/ACCOUNT_BALANCE
+    # järgi, mis 19 Aug backtestis oli see, mis vanade parameetritega
+    # (trend_thresh=0.1%) konto reaalselt tappis, mitte grid-loogika ise.
+    "max_lot":     0.02,
 }

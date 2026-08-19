@@ -408,7 +408,13 @@ def get_vol_mult():
 
 def get_compound_lot(balance):
     base = round(max(0.01, (balance/ACCOUNT_BALANCE)*0.01), 2)
-    return round(base * get_vol_mult(), 2)
+    lot = round(base * get_vol_mult(), 2)
+    # KAITSE: lot ülempiir — varem kasvas see piiramatult koos balance'iga,
+    # mis 19 Aug backtestis (päris H1 andmed, 2a) oli reaalne põhjus, miks
+    # vanad parameetrid (trend_thresh=0.1%) konto lõpuks tühjaks tegid, mitte
+    # grid-strateegia enda loogika. Fikseeritud lot'iga sama strateegia oli
+    # kasumlik ja stabiilne mõlemal poolel train/test jaotusest.
+    return min(lot, GRID_CONFIG["max_lot"])
 
 def get_scaled_max_float(balance):
     """Max floating loss skaleerub koos kontoga."""
