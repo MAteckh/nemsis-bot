@@ -169,9 +169,21 @@ GRID_CONFIG = {
     "trend_period": 10,
     "vol_thresh":  1.3,
     "vol_boost":   1.5,
-    # Lot suuruse ülempiir compounding jaoks (get_compound_lot()). Varem
-    # polnud piiri üldse — lot kasvas piiramatult balance/ACCOUNT_BALANCE
-    # järgi, mis 19 Aug backtestis oli see, mis vanade parameetritega
-    # (trend_thresh=0.1%) konto reaalselt tappis, mitte grid-loogika ise.
-    "max_lot":     0.02,
+    # Astmeline lot-suuruse kasv ("Disain A", valideeritud 21 Aug 2026
+    # backtestis päris 2a XAUUSD andmete peal: +2888% tootlus, 18.7% max
+    # drawdown — parem tootlus/risk suhe kui fikseeritud 0.02 cap
+    # (+1722%/14.4%). Lot kasvab ainult siis, kui bilanss on PÄRISELT
+    # läbinud piiri, mitte pidevalt proportsionaalselt nagu vana
+    # piiramatu valem, mis vanade parameetritega konto lõhki tegi.
+    "lot_tiers": [
+        (6400.0, 0.13),
+        (3200.0, 0.08),
+        (1600.0, 0.05),
+        (800.0,  0.03),
+        (400.0,  0.02),
+        (0.0,    0.01),
+    ],
+    # max_lot jääb absoluutse turvapiirina (tipp-astme väärtus) — kaitseb
+    # ka siis, kui vol_boost korrutaks lot'i üle tipp-astme väärtuse.
+    "max_lot":     0.13,
 }
