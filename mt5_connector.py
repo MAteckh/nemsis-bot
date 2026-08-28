@@ -15,6 +15,7 @@ logger = logging.getLogger("NEMSIS_V4")
 MT5_LOGIN   = int(os.environ.get("MT5_LOGIN", "0"))
 MT5_PASSWORD = os.environ.get("MT5_PASSWORD", "")
 MT5_SERVER  = os.environ.get("MT5_SERVER", "ICMarketsEU-MT5-5")
+MT5_TERMINAL_PATH = os.environ.get("MT5_TERMINAL_PATH", "")  # UUS: mitme terminali jaoks
 
 MAGIC = 234000
 
@@ -50,9 +51,19 @@ def _connect():
     global _connected
     if _connected:
         return True
-    if not mt5.initialize():
-        logger.error(f"MT5 initialize failed: {mt5.last_error()}")
-        return False
+    # UUS: kui MT5_TERMINAL_PATH on seatud, ühendub SELLE konkreetse terminali
+    # exe failiga (mitte suvalise jooksva terminaliga). See on hädavajalik,
+    # kui masinas jookseb korraga mitu MT5 terminali erinevate kontodega -
+    # ilma selleta üritaks mõlemad bot-protsessid ühenduda sama terminaliga
+    # ja üks logiks teise konto välja.
+    if MT5_TERMINAL_PATH:
+        if not mt5.initialize(path=MT5_TERMINAL_PATH):
+            logger.error(f"MT5 initialize (path={MT5_TERMINAL_PATH}) failed: {mt5.last_error()}")
+            return False
+    else:
+        if not mt5.initialize():
+            logger.error(f"MT5 initialize failed: {mt5.last_error()}")
+            return False
     if not mt5.login(MT5_LOGIN, password=MT5_PASSWORD, server=MT5_SERVER):
         logger.error(f"MT5 login failed: {mt5.last_error()}")
         mt5.shutdown()
@@ -208,6 +219,45 @@ def place_order(direction, symbol_name, lot, tp=None, sl=None):
         "price":   fill_price,
         "volume":  result.volume,
     }
+
+
+def modify_position_sl(ticket, new_sl):
+    """
+    UUS FUNKTSIOON (trailing SL jaoks) — muudab olemasoleva positsiooni
+    SL-i broker'i poolel, ilma positsiooni sulgemata/uuesti avamata.
+    Kasutab TRADE_ACTION_SLTP (mitte TRADE_ACTION_DEAL, mis on order'ite
+    jaoks) - see on MT5 standardne viis SL/TP muutmiseks lahtisel positsioonil.
+
+    Tagastab True edukuse korral, False vea korral. Ei muuda TP-d
+    (jätab selle samaks, mis positsioonil juba on - trailing SL kasutuse
+    puhul on TP tavaliselt None/seadmata).
+    """
+    if not is_connected():
+        logger.error("modify_position_sl: MT5 pole ühendatud")
+        return False
+
+    pos = mt5.positions_get(ticket=ticket)
+    if not pos:
+        logger.warning(f"modify_position_sl: positsioon {ticket} ei leitud MT5-s")
+        return False
+
+    p = pos[0]
+    request = {
+        "action":   mt5.TRADE_ACTION_SLTP,
+        "symbol":   p.symbol,
+        "position": ticket,
+        "sl":       float(new_sl),
+        "tp":       p.tp,  # jäta TP samaks (0.0 kui polnud seatud)
+        "magic":    MAGIC,
+    }
+    result = mt5.order_send(request)
+    if result is None or result.retcode != mt5.TRADE_RETCODE_DONE:
+        err = result.comment if result else mt5.last_error()
+        logger.error(f"modify_position_sl ebaõnnestus ticket={ticket} uus_sl={new_sl}: {err}")
+        return False
+
+    logger.info(f"🔧 SL muudetud: ticket={ticket} uus_sl={new_sl}")
+    return True
 
 
 def close_position(ticket):

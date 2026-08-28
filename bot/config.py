@@ -174,4 +174,27 @@ GRID_CONFIG = {
     # järgi, mis 19 Aug backtestis oli see, mis vanade parameetritega
     # (trend_thresh=0.1%) konto reaalselt tappis, mitte grid-loogika ise.
     "max_lot":     0.02,
+    # UUS (28 Aug 2026): astmeline lot-kasv (Design A stiilis), testitud
+    # koos trailing SL strateegiaga. Kui see võti on olemas, kasutab
+    # get_compound_lot() seda, mitte fikseeritud max_lot väärtust ülal.
+    # (max_lot jääb alles kui fallback/dokumentatsioon, kui lot_tiers
+    # eemaldataks tagasi.)
+    "lot_tiers": [
+        (200,  0.01),
+        (400,  0.02),
+        (800,  0.03),
+        (1600, 0.05),
+        (3200, 0.08),
+        (6400, 0.13),
+    ],
+}
+
+# UUS: trailing SL parameetrid (bot_trailing haru). Backtest 28 Aug 2026
+# (kuludega, poolitusel robustne): €16,776 kahe aasta peale trail_start=15/
+# trail_dist=10 kombinatsiooniga — kiirem trailing aktiveerumine kaitseb
+# kasumit varem fake-out'ide vastu paremini kui laiem SL (vt /areas/nemsis.md).
+TRAILING_CONFIG = {
+    "initial_sl":  45.0,  # alg-SL kaugus positsiooni avamisel ($)
+    "trail_start": 15.0,  # kasumi tase, millest trailing aktiveerub ($)
+    "trail_dist":  10.0,  # SL kaugus parimast saavutatud hinnast pärast aktiveerumist ($)
 }

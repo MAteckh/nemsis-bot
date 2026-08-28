@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 import pandas as pd
 import numpy as np
 
-from config import INSTRUMENTS, MEANREV_CONFIG, GRID_CONFIG
+from config import INSTRUMENTS, MEANREV_CONFIG, GRID_CONFIG, TRAILING_CONFIG
 from strategy_meanrev import MeanRevStrategy
 import mt5_connector as ct
 
@@ -409,11 +409,20 @@ def get_vol_mult():
 def get_compound_lot(balance):
     base = round(max(0.01, (balance/ACCOUNT_BALANCE)*0.01), 2)
     lot = round(base * get_vol_mult(), 2)
-    # KAITSE: lot ülempiir — varem kasvas see piiramatult koos balance'iga,
-    # mis 19 Aug backtestis (päris H1 andmed, 2a) oli reaalne põhjus, miks
-    # vanad parameetrid (trend_thresh=0.1%) konto lõpuks tühjaks tegid, mitte
-    # grid-strateegia enda loogika. Fikseeritud lot'iga sama strateegia oli
-    # kasumlik ja stabiilne mõlemal poolel train/test jaotusest.
+    # UUS (28 Aug 2026): astmeline lot-piir (lot_tiers) fikseeritud max_lot
+    # asemel. Testitud koos trailing SL strateegiaga päris andmetel (kuludega,
+    # poolitusel robustne mõlemal aastal): €106,793 kahe aasta peale vs
+    # €16,776 fikseeritud 0,02 lot'iga. AUS MÄRKUS: 60% sellest kasumist
+    # tuli kolmest järjestikusest kuust (2026-01..03) ühe tugeva trendi
+    # jooksul, mil lot oli juba maksimumini (0,13) kasvanud - number on
+    # rohkem seotud selle konkreetse turuperioodiga kui fikseeritud
+    # variant. Ükski kuu 22-st ei olnud siiski kahjumis (vt /areas/nemsis.md).
+    if "lot_tiers" in GRID_CONFIG:
+        tier_lot = GRID_CONFIG["lot_tiers"][0][1]
+        for threshold, l in GRID_CONFIG["lot_tiers"]:
+            if balance >= threshold:
+                tier_lot = l
+        return round(tier_lot * get_vol_mult(), 2)
     return min(lot, GRID_CONFIG["max_lot"])
 
 def get_scaled_max_float(balance):
@@ -574,7 +583,7 @@ def calc_gold_tp_sl(direction, level, atr, swing_low, swing_high):
 def send_grid_signals(center, trend, gs, tp_dist, sl_dist, lot):
     """
     Saada Telegrami valmis grid tasemed XTrend käsitsi sisestamiseks.
-    Iga tase: BUY LIMIT hind / TP hind / SL hind / lot
+    Iga tase: BUY LIMIT hind / TP hind (või "trailing", kui tp_dist=None) / SL hind / lot
     Kõik absoluuthinnad — kopeeri otse XTrend Price väljadesse.
     """
     gl = GRID_CONFIG["levels"]
@@ -584,16 +593,16 @@ def send_grid_signals(center, trend, gs, tp_dist, sl_dist, lot):
         lines.append("<b>BUY LIMIT orderid</b> (kopeeri XTrend Price väljadesse):")
         for i in range(1, gl+1):
             entry = round(center - i*gs, 2)
-            tp    = round(entry + tp_dist, 2)
             sl    = round(entry - sl_dist, 2)
-            lines.append(f"{i}. Entry <b>{entry}</b> / TP <b>{tp}</b> / SL <b>{sl}</b>")
+            tp_txt = f"TP <b>{round(entry + tp_dist, 2)}</b>" if tp_dist is not None else "TP: <b>trailing</b>"
+            lines.append(f"{i}. Entry <b>{entry}</b> / {tp_txt} / SL <b>{sl}</b>")
     elif trend == "bear":
         lines.append("<b>SELL LIMIT orderid</b> (kopeeri XTrend Price väljadesse):")
         for i in range(1, gl+1):
             entry = round(center + i*gs, 2)
-            tp    = round(entry - tp_dist, 2)
             sl    = round(entry + sl_dist, 2)
-            lines.append(f"{i}. Entry <b>{entry}</b> / TP <b>{tp}</b> / SL <b>{sl}</b>")
+            tp_txt = f"TP <b>{round(entry - tp_dist, 2)}</b>" if tp_dist is not None else "TP: <b>trailing</b>"
+            lines.append(f"{i}. Entry <b>{entry}</b> / {tp_txt} / SL <b>{sl}</b>")
 
     lines.append("")
     lines.append("⚠️ Sisesta Price väljadesse (mitte Pips). Profit väli näitab ≈ kinnitust.")
@@ -651,11 +660,14 @@ def run_gold_grid(price, high, low, now):
                 lot   = get_compound_lot(balance)
                 fl    = (price-entry)*lot*100 if d == "buy" else (entry-price)*lot*100
                 ticket = pos.get("mt5_ticket")
-                close_ok = True
+                close_ok = False
                 if ticket:
                     close_ok = ct.close_position(int(ticket))
                     if not close_ok:
                         add_log(f"⚠️ Weekend sulgemine: MT5 positsioon {ticket} sulgemine ebaõnnestus")
+                else:
+                    add_log(f"⚠️ Weekend sulgemine: positsioonil {pos.get('id')} puudub mt5_ticket — vajab käsitsi kontrolli!")
+                    send_telegram(f"⚠️ <b>TÄHELEPANU:</b> nädalavahetuse sulgemisel puudus positsioonil mt5_ticket. Kontrolli MT5-l käsitsi!")
                 if close_ok:
                     balance = round(balance+fl, 2)
                     sb_upsert("signals", {"id": pos["id"], "executed": True})
@@ -704,7 +716,7 @@ def run_gold_grid(price, high, low, now):
         save_grid_state({"center":center,"trend":effective_trend,"pending":pending})
         add_log(f"🔲 Gold grid initsialiseeritud @ ${center:.0f} | {effective_trend}")
         # Saada XTrend signaalid käsitsi sisestamiseks
-        send_grid_signals(center, effective_trend, gs, 30.0, 45.0, get_compound_lot(balance))
+        send_grid_signals(center, effective_trend, gs, None, TRAILING_CONFIG["initial_sl"], get_compound_lot(balance))
         return
 
     pending    = grid_state.get("pending", {})
@@ -716,7 +728,7 @@ def run_gold_grid(price, high, low, now):
         new_c = round(price/gs)*gs
         save_grid_state({"center":new_c,"trend":effective_trend if effective_trend != "neutral" else grid_trend,"pending":setup_grid(new_c, effective_trend if effective_trend != "neutral" else grid_trend)})
         add_log(f"🔄 Grid auto-reset: hind ${price:.0f} kaugel keskusest ${grid_center:.0f}")
-        send_grid_signals(new_c, effective_trend if effective_trend != "neutral" else grid_trend, gs, 30.0, 45.0, get_compound_lot(balance))
+        send_grid_signals(new_c, effective_trend if effective_trend != "neutral" else grid_trend, gs, None, TRAILING_CONFIG["initial_sl"], get_compound_lot(balance))
         return
 
     if effective_trend != grid_trend and effective_trend != "neutral":
@@ -731,11 +743,14 @@ def run_gold_grid(price, high, low, now):
             # positsioon jäetuna lahti samasse vastutrendi, mis kaotusi tekitab,
             # ei ole reaalselt kaitstud kasum, vaid ohus paberkasum.
             ticket = pos.get("mt5_ticket")
-            close_ok = True
+            close_ok = False
             if ticket:
                 close_ok = ct.close_position(int(ticket))
                 if not close_ok:
                     add_log(f"⚠️ Trend reset: MT5 positsioon {ticket} sulgemine ebaõnnestus — proovin uuesti järgmisel scannil")
+            else:
+                add_log(f"⚠️ Trend reset: positsioonil {pos.get('id')} puudub mt5_ticket — EI sule automaatselt, vajab käsitsi kontrolli MT5-l!")
+                send_telegram(f"⚠️ <b>TÄHELEPANU:</b> positsioonil puudub mt5_ticket, trendipööre ei saanud seda sulgeda automaatselt. Kontrolli MT5-l käsitsi!")
             if close_ok:
                 balance = round(balance+fl, 2)
                 sb_upsert("signals", {"id":pos["id"],"executed":True})
@@ -743,40 +758,56 @@ def run_gold_grid(price, high, low, now):
         new_c = round(price/gs)*gs
         save_grid_state({"center":new_c,"trend":effective_trend,"pending":setup_grid(new_c, effective_trend)})
         add_log(f"🔄 Gold grid reset: {grid_trend}→{effective_trend}")
-        send_grid_signals(new_c, effective_trend, gs, 30.0, 45.0, get_compound_lot(balance))
+        send_grid_signals(new_c, effective_trend, gs, None, TRAILING_CONFIG["initial_sl"], get_compound_lot(balance))
         return
 
     open_pos = get_gold_positions()
     for pos in open_pos:
         entry = float(pos.get("entry",0))
-        tp    = float(pos.get("tp",0))
         d     = pos.get("direction","buy")
         pid   = pos.get("id")
+        ticket = pos.get("mt5_ticket")
         lot   = get_compound_lot(balance)
 
-        if (high>=tp if d=="buy" else low<=tp):
-            pnl     = abs(tp-entry)*lot*100
-            balance = round(balance+pnl, 2)
-            sb_upsert("signals", {"id":pid,"executed":True})
-            sb_upsert("bot_state", {"id":1,"balance":balance})
-            add_log(f"✅ Gold TP: {d.upper()} @ {entry:.0f}→{tp:.0f}  +{pnl:.2f}€")
-            send_telegram(f"✅ <b>Gold TP!</b>\n{d.upper()} @ {entry:.0f}→{tp:.0f}\n+<b>{pnl:.2f}€</b> | {balance:.2f}€")
-            opp = "sell" if d=="buy" else "buy"
-            if not (effective_trend=="bull" and opp=="sell") and not (effective_trend=="bear" and opp=="buy"):
-                pending[str(tp)] = opp
-                grid_state["pending"] = pending
-                save_grid_state(grid_state)
-            continue
+        # UUS: TRAILING SL loogika, asendab vana fikseeritud-TP kontrolli.
+        # Broker'i SL sulgeb positsiooni ise (nagu enne) - sync_mt5_positions()
+        # tuvastab selle ja uuendab Supabase't + balance't automaatselt (vt
+        # sync_mt5_positions() funktsiooni, mida pole siin muudetud). Selle
+        # ploki ülesanne on AINULT: kui positsioon on veel lahti, kontrolli,
+        # kas kasum on jõudnud trail_start piirini, ja kui jah, TIHENDA SL-i
+        # (kunagi ei lõdvenda) broker'i poolel läbi modify_position_sl().
+        best  = float(pos.get("best_price", entry))
+        sl    = float(pos.get("sl", 0))
+        cur_best = max(best, high) if d == "buy" else min(best, low)
+        profit_now = (cur_best - entry) if d == "buy" else (entry - cur_best)
+
+        if profit_now >= TRAILING_CONFIG["trail_start"]:
+            trail_dist = TRAILING_CONFIG["trail_dist"]
+            new_sl = round(cur_best - trail_dist, 2) if d == "buy" else round(cur_best + trail_dist, 2)
+            improves = (new_sl > sl) if d == "buy" else (new_sl < sl or sl == 0)
+            if improves and ticket:
+                ok = ct.modify_position_sl(int(ticket), new_sl)
+                if ok:
+                    sl = new_sl
+                    add_log(f"📈 Trailing SL: {d.upper()} @ {entry:.0f}  uus SL:{new_sl:.0f}  (kasum hetkel {profit_now:.0f}$)")
+                else:
+                    add_log(f"⚠️ Trailing SL muutmine ebaõnnestus ticket={ticket}")
+
+        if cur_best != best or sl != float(pos.get("sl", 0)):
+            sb_upsert("signals", {"id": pid, "best_price": cur_best, "sl": sl})
 
         fl = (price-entry)*lot*100 if d=="buy" else (entry-price)*lot*100
         if fl < -get_scaled_max_float(balance):
             # Sulge PÄRIS MT5 positsioon
             ticket = pos.get("mt5_ticket")
-            close_ok = True
+            close_ok = False
             if ticket:
                 close_ok = ct.close_position(int(ticket))
                 if not close_ok:
                     add_log(f"⚠️ Float stop: MT5 positsioon {ticket} sulgemine ebaõnnestus — proovin uuesti järgmisel scannil")
+            else:
+                add_log(f"⚠️ Float stop: positsioonil {pid} puudub mt5_ticket — vajab käsitsi kontrolli!")
+                send_telegram(f"⚠️ <b>TÄHELEPANU:</b> float-stop käivitus, aga positsioonil puudus mt5_ticket. Kontrolli MT5-l käsitsi!")
             if close_ok:
                 balance = round(balance+fl, 2)
                 sb_upsert("signals", {"id":pid,"executed":True})
@@ -794,12 +825,10 @@ def run_gold_grid(price, high, low, now):
         same = [p for p in get_gold_positions() if p.get("direction")==direction]
         if len(same) >= gl: continue
         lot = get_compound_lot(balance)
-        # TP/SL arvutatakse PÄRIS hetkehinna (price) pealt, mitte vana
-        # pending-taseme (level) pealt — order on market order, mis täitub
-        # kohese turuhinnaga, mis võib vanast level'ist kaugel olla, kui
-        # pending tase jäi Supabase'i seisma (nt bot restart vahepeal).
-        tp = round(price + 30.0 if direction=="buy" else price - 30.0, 2)
-        sl = round(price - 45.0 if direction=="buy" else price + 45.0, 2)
+        # UUS: trailing SL - EI SEATA TP-d (None), ainult alg-SL.
+        # Positsioon suletakse ainult trailing-SL kaudu (ülal olev plokk
+        # tihendab seda kasumi kasvades) või float-stopiga.
+        sl = round(price - TRAILING_CONFIG["initial_sl"] if direction=="buy" else price + TRAILING_CONFIG["initial_sl"], 2)
         # KAITSE 1: max 3 lahtist positsiooni (variant C — backtest +422€/kuu)
         open_now = ct.get_open_positions("XAUUSD")
         if len(open_now) >= 3:
@@ -814,7 +843,7 @@ def run_gold_grid(price, high, low, now):
         if time.time() - _last_order_time < 480:
             continue
         # Saada KÕIGEPEALT päris order MT5-sse, kontrolli tulemust
-        order_result = ct.place_order(direction, "XAUUSD", lot, tp=tp, sl=sl)
+        order_result = ct.place_order(direction, "XAUUSD", lot, tp=None, sl=sl)
         if "error" not in order_result:
             _last_order_time = time.time()
         if "error" in order_result:
@@ -822,19 +851,21 @@ def run_gold_grid(price, high, low, now):
             continue
         # Alles pärast edukat orderit salvesta Supabase-sse.
         # entry = PÄRIS täitmishind (price), mitte vana pending-tase (level) —
-        # muidu on kõik hilisemad P&L arvutused (TP-kontroll, float-stop,
-        # trendi-pöördumine) selle positsiooni peal valed, kuna order täitub
-        # market order'ina hetkehinnaga, mitte vana level'iga.
+        # muidu on kõik hilisemad P&L arvutused (float-stop, trendi-pöördumine)
+        # selle positsiooni peal valed, kuna order täitub market order'ina
+        # hetkehinnaga, mitte vana level'iga.
+        # best_price: UUS väli trailing SL jaoks - algab entry hinnaga,
+        # jälgib parimat saavutatud hinda positsiooni elu jooksul.
         sb_insert("signals", {
-            "direction":direction,"entry":price,"tp":tp,
-            "sl":sl,
+            "direction":direction,"entry":price,"tp":None,
+            "sl":sl,"best_price":price,
             "lot":lot,"regime":"grid","session":f"gold_{effective_trend}",
             "executed":False,"breakeven":False,"atr":gs,"score":0,"rr":3.0,
             "mt5_ticket": order_result.get("orderId"),
         })
         triggered.append(level_str)
-        add_log(f"📊 Gold order: {direction.upper()} @ {price:.0f}  TP:{tp:.0f} (ticket:{order_result.get('orderId')})")
-        send_telegram(f"📊 <b>Gold Grid Order</b>\n{direction.upper()} @ <b>{price:.0f}</b>\nTP: <b>{tp:.0f}</b> | {effective_trend}")
+        add_log(f"📊 Gold order: {direction.upper()} @ {price:.0f}  alg-SL:{sl:.0f} (trailing) (ticket:{order_result.get('orderId')})")
+        send_telegram(f"📊 <b>Gold Grid Order</b>\n{direction.upper()} @ <b>{price:.0f}</b>\nAlg-SL: <b>{sl:.0f}</b> (trailing) | {effective_trend}")
 
     for ls in triggered:
         if ls in pending: del pending[ls]
@@ -901,11 +932,33 @@ def run_gold_grid(price, high, low, now):
 # ─────────────────────────────────────────────────────────
 
 def get_stats():
-    """Konto statistika — wins, kaotused, net P&L."""
+    """Konto statistika — wins, kaotused, net P&L.
+
+    UUS MÄRKUS (trailing SL haru): grid-tehingutel pole enam 'tp' välja
+    (see on alati None trailing-SL puhul), seega vana heuristika "tp>0 == võit"
+    ei tööta enam grid-tehingute jaoks. Kasutan selle asemel 'best_price' vs
+    'entry' vahet ligikaudse asendajana - kui parim saavutatud hind ületas
+    trail_start piiri, loetakse see tõenäoliseks võiduks. See on LÄHENDUS,
+    mitte täpne tegelik väljumis-P&L, kuna päris realiseeritud kasumit/kahjumit
+    ei salvestata praegu tehingu kohta broker-poolse SL-sulgemise puhul (vt
+    sync_mt5_positions() - see loeb ainult kogu-konto balance'i, mitte
+    tehingu-põhist P&L-i). Kui täpne win-rate on oluline, on vaja lisada
+    'realized_pnl' väli, mis täidetaks mt5.history_deals_get() kaudu.
+    """
     try:
         trades = sb_select("signals", "executed=eq.true&order=created_at.desc&limit=100")
         if not trades: return {"total": 0, "wins": 0, "net_pnl": 0.0, "win_rate": 0}
-        wins = [t for t in trades if float(t.get("tp") or 0) > 0]
+        wins = []
+        for t in trades:
+            if t.get("regime") == "grid" and t.get("tp") is None:
+                entry = float(t.get("entry") or 0)
+                best = float(t.get("best_price") or entry)
+                d = t.get("direction", "buy")
+                excursion = (best - entry) if d == "buy" else (entry - best)
+                if excursion >= TRAILING_CONFIG["trail_start"]:
+                    wins.append(t)
+            elif float(t.get("tp") or 0) > 0:
+                wins.append(t)
         return {
             "total":    len(trades),
             "wins":     len(wins),
