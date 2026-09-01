@@ -174,4 +174,16 @@ GRID_CONFIG = {
     # järgi, mis 19 Aug backtestis oli see, mis vanade parameetritega
     # (trend_thresh=0.1%) konto reaalselt tappis, mitte grid-loogika ise.
     "max_lot":     0.02,
+    # Astmeline lot-kasv (Design A), merge'itud 21 Aug 2026 VPS main'ile
+    # (commit b7634d9). Kui see võti on olemas, kasutab get_compound_lot()
+    # seda, mitte fikseeritud max_lot väärtust ülal. See on PRAEGU LIVE
+    # deployed konfiguratsioon reaalkontol 525854.
+    "lot_tiers": [
+        (200,  0.01),
+        (400,  0.02),
+        (800,  0.03),
+        (1600, 0.05),
+        (3200, 0.08),
+        (6400, 0.13),
+    ],
 }

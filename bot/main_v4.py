@@ -62,15 +62,30 @@ def sb_upsert(table, data):
     except Exception as e:
         logger.error(f"SB upsert: {e}")
 
-def sb_insert(table, data):
+def sb_insert(table, data, retry=True):
+    """
+    Tagastab True/False, kas kirje reaalselt Supabase'i jõudis.
+    UUS (1 Sept 2026): varem oli see fire-and-forget - kui insert
+    ebaõnnestus (nt puuduva veeru tõttu, nagu 1 Sept juhtus reaalkontol
+    525854, kaks tehingut 92726307/92771116 jäid Supabase'ist puudu ja
+    bot ei suutnud neid seejärel automaatselt hallata), ei saanud
+    väljakutsuja sellest kunagi teada. Nüüd proovitakse üks kord uuesti
+    (lühikese viivitusega, transientse võrguvea puhuks) ja tagastatakse
+    selge õnnestumise/ebaõnnestumise staatus, et väljakutsuja saaks
+    kasutajat hoiatada, kui PÄRIS MT5 positsioon jääb jälgimiseta.
+    """
     try:
         r = requests.post(f"{SUPABASE_URL}/rest/v1/{table}", headers=sb_headers(), json=data, timeout=10)
-        if r.status_code not in (200,201):
-            # Logi PÄRIS veateade (Supabase/PostgREST vastuse sisu), mitte ainult
-            # staatuskoodi — muidu ei tea kunagi, MIKS päring tagasi lükati.
-            logger.warning(f"SB insert {table}: {r.status_code} — {r.text[:500]}")
+        if r.status_code in (200,201):
+            return True
+        logger.warning(f"SB insert {table}: {r.status_code} — {r.text[:500]}")
     except Exception as e:
         logger.error(f"SB insert: {e}")
+
+    if retry:
+        time.sleep(2)
+        return sb_insert(table, data, retry=False)
+    return False
 
 def sb_select(table, params=""):
     try:
@@ -409,6 +424,14 @@ def get_vol_mult():
 def get_compound_lot(balance):
     base = round(max(0.01, (balance/ACCOUNT_BALANCE)*0.01), 2)
     lot = round(base * get_vol_mult(), 2)
+    # Astmeline lot-kasv (Design A) — kasutatakse, kui lot_tiers on config's
+    # olemas (praegu on, live VPS peal). Fikseeritud max_lot jääb fallback'iks.
+    if "lot_tiers" in GRID_CONFIG:
+        tier_lot = GRID_CONFIG["lot_tiers"][0][1]
+        for threshold, l in GRID_CONFIG["lot_tiers"]:
+            if balance >= threshold:
+                tier_lot = l
+        return round(tier_lot * get_vol_mult(), 2)
     # KAITSE: lot ülempiir — varem kasvas see piiramatult koos balance'iga,
     # mis 19 Aug backtestis (päris H1 andmed, 2a) oli reaalne põhjus, miks
     # vanad parameetrid (trend_thresh=0.1%) konto lõpuks tühjaks tegid, mitte
@@ -651,11 +674,16 @@ def run_gold_grid(price, high, low, now):
                 lot   = get_compound_lot(balance)
                 fl    = (price-entry)*lot*100 if d == "buy" else (entry-price)*lot*100
                 ticket = pos.get("mt5_ticket")
-                close_ok = True
+                close_ok = False
                 if ticket:
                     close_ok = ct.close_position(int(ticket))
                     if not close_ok:
                         add_log(f"⚠️ Weekend sulgemine: MT5 positsioon {ticket} sulgemine ebaõnnestus")
+                else:
+                    # UUS: puuduva mt5_ticket puhul enam ei märgita vaikimisi
+                    # suletuks (vt trendipöörde plokk allpool, sama parandus).
+                    add_log(f"⚠️ Weekend sulgemine: positsioonil {pos.get('id')} puudub mt5_ticket — vajab käsitsi kontrolli!")
+                    send_telegram(f"⚠️ <b>TÄHELEPANU:</b> nädalavahetuse sulgemisel puudus positsioonil mt5_ticket. Kontrolli MT5-l käsitsi!")
                 if close_ok:
                     balance = round(balance+fl, 2)
                     sb_upsert("signals", {"id": pos["id"], "executed": True})
@@ -731,11 +759,19 @@ def run_gold_grid(price, high, low, now):
             # positsioon jäetuna lahti samasse vastutrendi, mis kaotusi tekitab,
             # ei ole reaalselt kaitstud kasum, vaid ohus paberkasum.
             ticket = pos.get("mt5_ticket")
-            close_ok = True
+            close_ok = False
             if ticket:
                 close_ok = ct.close_position(int(ticket))
                 if not close_ok:
                     add_log(f"⚠️ Trend reset: MT5 positsioon {ticket} sulgemine ebaõnnestus — proovin uuesti järgmisel scannil")
+            else:
+                # UUS: varem oli see vaikimisi True ehk "suletud", mis TÄHENDAS,
+                # et kui mt5_ticket väli oli mingil põhjusel tühi, märkis bot
+                # Supabase's positsiooni suletuks ILMA MT5-l reaalselt midagi
+                # sulgemata - konto sisemine arvestus lahknes reaalsest MT5
+                # seisust, ilma et keegi seda märganud oleks (juhtus 28 Aug 2026).
+                add_log(f"⚠️ Trend reset: positsioonil {pos.get('id')} puudub mt5_ticket — EI sule automaatselt, vajab käsitsi kontrolli MT5-l!")
+                send_telegram(f"⚠️ <b>TÄHELEPANU:</b> positsioonil puudub mt5_ticket, trendipööre ei saanud seda sulgeda automaatselt. Kontrolli MT5-l käsitsi!")
             if close_ok:
                 balance = round(balance+fl, 2)
                 sb_upsert("signals", {"id":pos["id"],"executed":True})
@@ -772,11 +808,14 @@ def run_gold_grid(price, high, low, now):
         if fl < -get_scaled_max_float(balance):
             # Sulge PÄRIS MT5 positsioon
             ticket = pos.get("mt5_ticket")
-            close_ok = True
+            close_ok = False
             if ticket:
                 close_ok = ct.close_position(int(ticket))
                 if not close_ok:
                     add_log(f"⚠️ Float stop: MT5 positsioon {ticket} sulgemine ebaõnnestus — proovin uuesti järgmisel scannil")
+            else:
+                add_log(f"⚠️ Float stop: positsioonil {pid} puudub mt5_ticket — vajab käsitsi kontrolli!")
+                send_telegram(f"⚠️ <b>TÄHELEPANU:</b> float-stop käivitus, aga positsioonil puudus mt5_ticket. Kontrolli MT5-l käsitsi!")
             if close_ok:
                 balance = round(balance+fl, 2)
                 sb_upsert("signals", {"id":pid,"executed":True})
@@ -825,7 +864,7 @@ def run_gold_grid(price, high, low, now):
         # muidu on kõik hilisemad P&L arvutused (TP-kontroll, float-stop,
         # trendi-pöördumine) selle positsiooni peal valed, kuna order täitub
         # market order'ina hetkehinnaga, mitte vana level'iga.
-        sb_insert("signals", {
+        sb_ok = sb_insert("signals", {
             "direction":direction,"entry":price,"tp":tp,
             "sl":sl,
             "lot":lot,"regime":"grid","session":f"gold_{effective_trend}",
@@ -835,6 +874,13 @@ def run_gold_grid(price, high, low, now):
         triggered.append(level_str)
         add_log(f"📊 Gold order: {direction.upper()} @ {price:.0f}  TP:{tp:.0f} (ticket:{order_result.get('orderId')})")
         send_telegram(f"📊 <b>Gold Grid Order</b>\n{direction.upper()} @ <b>{price:.0f}</b>\nTP: <b>{tp:.0f}</b> | {effective_trend}")
+        if not sb_ok:
+            # KRIITILINE: PÄRIS MT5 positsioon on olemas, aga bot ei tea
+            # sellest oma andmebaasis - keegi peab käsitsi jälgima/sulgema,
+            # kuna trendipööre/nädalavahetuse-sulgemine/float-stop ei
+            # suuda seda automaatselt hallata.
+            logger.error(f"🚨 KRIITILINE: order {order_result.get('orderId')} täitus MT5-l, aga Supabase salvestus ebaõnnestus kahel katsel - positsioon on JÄLGIMATA!")
+            send_telegram(f"🚨 <b>KRIITILINE HOIATUS</b>\nTicket <b>{order_result.get('orderId')}</b> ({direction.upper()} @ {price:.0f}) täitus MT5-l, aga andmebaasi salvestus ebaõnnestus.\nBot EI SAA seda positsiooni automaatselt hallata (trendipööre/nädalavahetus/float-stop ei toimi sellel).\n<b>Kontrolli ja halda MT5-l käsitsi!</b>")
 
     for ls in triggered:
         if ls in pending: del pending[ls]
@@ -866,7 +912,7 @@ def run_gold_grid(price, high, low, now):
                         sl_scalp = round(price - 15, 2)
                         scalp_result = ct.place_order("buy", "XAUUSD", lot_scalp, tp=tp_scalp, sl=sl_scalp)
                         if "error" not in scalp_result:
-                            sb_insert("signals", {
+                            sb_ok = sb_insert("signals", {
                                 "direction":"buy","entry":round(price,2),"tp":tp_scalp,
                                 "sl":sl_scalp,"lot":lot_scalp,"regime":"grid",
                                 "session":"scalp_bull","executed":False,"breakeven":False,
@@ -874,6 +920,9 @@ def run_gold_grid(price, high, low, now):
                                 "mt5_ticket": scalp_result.get("orderId"),
                             })
                             add_log(f"⚡ Scalp BUY @ {price:.0f} TP:{tp_scalp:.0f}")
+                            if not sb_ok:
+                                logger.error(f"🚨 KRIITILINE: scalp order {scalp_result.get('orderId')} täitus MT5-l, aga Supabase salvestus ebaõnnestus - positsioon on JÄLGIMATA!")
+                                send_telegram(f"🚨 <b>KRIITILINE HOIATUS</b>\nScalp ticket <b>{scalp_result.get('orderId')}</b> (BUY @ {price:.0f}) täitus MT5-l, aga andmebaasi salvestus ebaõnnestus.\n<b>Kontrolli ja halda MT5-l käsitsi!</b>")
                         else:
                             add_log(f"❌ Scalp BUY ebaõnnestus: {scalp_result['error']}")
 
@@ -883,7 +932,7 @@ def run_gold_grid(price, high, low, now):
                         sl_scalp = round(price + 15, 2)
                         scalp_result = ct.place_order("sell", "XAUUSD", lot_scalp, tp=tp_scalp, sl=sl_scalp)
                         if "error" not in scalp_result:
-                            sb_insert("signals", {
+                            sb_ok = sb_insert("signals", {
                                 "direction":"sell","entry":round(price,2),"tp":tp_scalp,
                                 "sl":sl_scalp,"lot":lot_scalp,"regime":"grid",
                                 "session":"scalp_bear","executed":False,"breakeven":False,
@@ -891,6 +940,9 @@ def run_gold_grid(price, high, low, now):
                                 "mt5_ticket": scalp_result.get("orderId"),
                             })
                             add_log(f"⚡ Scalp SELL @ {price:.0f} TP:{tp_scalp:.0f}")
+                            if not sb_ok:
+                                logger.error(f"🚨 KRIITILINE: scalp order {scalp_result.get('orderId')} täitus MT5-l, aga Supabase salvestus ebaõnnestus - positsioon on JÄLGIMATA!")
+                                send_telegram(f"🚨 <b>KRIITILINE HOIATUS</b>\nScalp ticket <b>{scalp_result.get('orderId')}</b> (SELL @ {price:.0f}) täitus MT5-l, aga andmebaasi salvestus ebaõnnestus.\n<b>Kontrolli ja halda MT5-l käsitsi!</b>")
                         else:
                             add_log(f"❌ Scalp SELL ebaõnnestus: {scalp_result['error']}")
     except Exception as e:
