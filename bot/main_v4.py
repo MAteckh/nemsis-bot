@@ -898,7 +898,12 @@ def run_gold_grid(price, high, low, now):
             range5 = h5 - l5
 
             # Scalp ainult kui liikumine on piisavalt suur (>$10)
-            if range5 > 10:
+            # UUS (2 Sept 2026): range-lävi tõstetud $10 -> $20, TP/SL vahetatud
+            # $10/$15 (60,0% vajalik võiduprotsent, sai 59,5% - matemaatiliselt
+            # kaotav) -> $12/$25 (67,6% vajalik, testitud 69,9% M5 reaalandmetel,
+            # märts-august 2026, kasumlik mõlemal poolaastal eraldi, ei läinud
+            # kordagi miinusesse). Serv on ikka õhuke - jälgi jätkuvalt.
+            if range5 > 20:
                 scalp_positions = [p for p in get_gold_positions() if p.get("session","").startswith("scalp")]
                 if len(scalp_positions) < 2:  # max 2 scalp positsiooni
                     lot_scalp = round(round(max(0.01, (balance/ACCOUNT_BALANCE)*0.01) / 0.01) * 0.01, 2)
@@ -908,8 +913,8 @@ def run_gold_grid(price, high, low, now):
                         # l5 (5min madalpunkt) pealt — order on market order, mis täitub
                         # kohese turuhinnaga, mistõttu vana l5-põhine TP oli tihti juba
                         # peaaegu käes enne kui order üldse täitus (nt +0,90€ 18 sek pärast).
-                        tp_scalp = round(price + 10, 2)
-                        sl_scalp = round(price - 15, 2)
+                        tp_scalp = round(price + 12, 2)
+                        sl_scalp = round(price - 25, 2)
                         scalp_result = ct.place_order("buy", "XAUUSD", lot_scalp, tp=tp_scalp, sl=sl_scalp)
                         if "error" not in scalp_result:
                             sb_ok = sb_insert("signals", {
@@ -928,8 +933,8 @@ def run_gold_grid(price, high, low, now):
 
                     elif effective_trend == "bear" and h5 > price + 5:
                         # Sama parandus mis BUY harus — price, mitte vana h5
-                        tp_scalp = round(price - 10, 2)
-                        sl_scalp = round(price + 15, 2)
+                        tp_scalp = round(price - 12, 2)
+                        sl_scalp = round(price + 25, 2)
                         scalp_result = ct.place_order("sell", "XAUUSD", lot_scalp, tp=tp_scalp, sl=sl_scalp)
                         if "error" not in scalp_result:
                             sb_ok = sb_insert("signals", {
