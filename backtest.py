@@ -60,7 +60,13 @@ def load_ohlc_csv(path):
         df = df.drop(columns=["time_extra"])
     if "time" not in df.columns:
         raise ValueError(f"CSV veerud {list(df.columns)} — ei leidnud aja veergu (time/date/datetime)")
-    df["time"] = pd.to_datetime(df["time"], utc=True)
+    if pd.api.types.is_numeric_dtype(df["time"]):
+        # Unix epoch — tuvasta kas ms või s (nt broker/andmeteenuse eksport,
+        # mitte inimloetav kuupäev).
+        unit = "ms" if df["time"].iloc[0] > 1e11 else "s"
+        df["time"] = pd.to_datetime(df["time"], unit=unit, utc=True)
+    else:
+        df["time"] = pd.to_datetime(df["time"], utc=True)
     df = df.set_index("time").sort_index()
     for col in ("open", "high", "low", "close"):
         if col not in df.columns:
@@ -336,6 +342,130 @@ def simulate_gold_grid(df, grid_cfg=None, instrument_cfg=None, account_balance=2
     return {"trades": closed_trades, "equity": equity, "final_balance": balance}
 
 
+def simulate_scalp_layer(df5, grid_cfg=None, instrument_cfg=None, account_balance=200.0, pip_value=100.0):
+    """
+    Simuleerib SCALPING LAYER'it (main_v4.run_gold_grid() lõpuosa) M5
+    andmete peal. Trendi jaoks kasutab TUNNI-graafiku lähendust, mis
+    ehitatakse SAMAST M5 reast (tunni kese täieneb küünal-küünla kaupa,
+    ilma tuleviku andmeid kasutamata — praegu pooleliolev tund kasutab
+    ainult selle tunni juba nähtud M5 küünlaid, mitte terve tunni lõplikku
+    OHLC-d).
+
+    Ausad lihtsustused (võrreldes päris botiga):
+    - Signaal loetakse bar[i] high/low järgi, POSITSIOON avatakse bar[i+1]
+      open hinnaga — see väldib look-ahead viga (bar[i] close kasutamine
+      korraga nii signaali kui täitmishinnana oleks optimistlik).
+    - Bot ise kasutab signaali jaoks bar[i] high/low't, aga võrdleb seda
+      HETKE LIVE tick-hinnaga (mis jõuab kohale mõni sekund hiljem) —
+      järgmise bar'i open on sellele lähim proxy, mis meil 5-min
+      andmetest võtta on.
+    """
+    grid_cfg = copy.deepcopy(grid_cfg or DEFAULT_GRID_CONFIG)
+    instrument_cfg = instrument_cfg or INSTRUMENTS["XAUUSD"]
+    trend_period = grid_cfg["trend_period"]
+    trend_thresh = instrument_cfg["trend_thresh"]
+
+    h1_closes = []          # lõpetatud tundide sulgemishinnad
+    cur_hour = None
+    cur_hour_close = None
+    trend_history = []
+    balance = account_balance
+    open_positions = []
+    closed_trades = []
+    equity_points = []
+
+    warmup = (trend_period + 3) * 12  # ~ piisavalt M5 baare mitme tunni jaoks
+
+    for i in range(warmup, len(df5) - 1):
+        bar = df5.iloc[i]
+        now = df5.index[i]
+        high, low, close = float(bar["high"]), float(bar["low"]), float(bar["close"])
+
+        hour_key = now.floor("h")
+        if cur_hour is None:
+            cur_hour = hour_key
+        elif hour_key != cur_hour:
+            h1_closes.append(cur_hour_close)
+            if len(h1_closes) > trend_period + 5:
+                h1_closes.pop(0)
+            cur_hour = hour_key
+        cur_hour_close = close
+
+        # ── nädalavahetus ──
+        if now.weekday() == 4 and now.hour >= 21:
+            for pos in open_positions:
+                pnl = (close - pos.entry) * pos.lot * pip_value if pos.direction == "buy" \
+                    else (pos.entry - close) * pos.lot * pip_value
+                pos.closed_at, pos.pnl, pos.reason = now, pnl, "weekend"
+                balance += pnl
+                closed_trades.append(pos)
+            open_positions = []
+            equity_points.append((now, balance))
+            continue
+        if now.weekday() in (5, 6):
+            equity_points.append((now, balance))
+            continue
+
+        closes_for_trend = h1_closes + [cur_hour_close]
+        if len(closes_for_trend) < trend_period + 2:
+            trend = "neutral"
+        else:
+            now_c, ago_c = closes_for_trend[-1], closes_for_trend[-trend_period - 1]
+            chg = (now_c - ago_c) / ago_c * 100
+            trend = "bull" if chg > trend_thresh else "bear" if chg < -trend_thresh else "neutral"
+        trend_history.append(trend)
+        if len(trend_history) > 3:
+            trend_history.pop(0)
+        effective_trend = trend if len(trend_history) == 3 and all(t == trend_history[0] for t in trend_history) else "neutral"
+
+        news_blackout = grid_cfg.get("news_filter", True) and gold_logic.is_news_blackout(now)
+
+        # ── TP/SL kontroll ──
+        still_open = []
+        for pos in open_positions:
+            tp_hit = (high >= pos.tp) if pos.direction == "buy" else (low <= pos.tp)
+            sl_hit = (low <= pos.sl) if pos.direction == "buy" else (high >= pos.sl)
+            if tp_hit and sl_hit:
+                pnl = (pos.sl - pos.entry) * pos.lot * pip_value if pos.direction == "buy" \
+                    else (pos.entry - pos.sl) * pos.lot * pip_value
+                pos.closed_at, pos.pnl, pos.reason = now, pnl, "sl(ambiguous_bar)"
+                balance += pnl; closed_trades.append(pos)
+            elif tp_hit:
+                pnl = (pos.tp - pos.entry) * pos.lot * pip_value if pos.direction == "buy" \
+                    else (pos.entry - pos.tp) * pos.lot * pip_value
+                pos.closed_at, pos.pnl, pos.reason = now, pnl, "tp"
+                balance += pnl; closed_trades.append(pos)
+            elif sl_hit:
+                pnl = (pos.sl - pos.entry) * pos.lot * pip_value if pos.direction == "buy" \
+                    else (pos.entry - pos.sl) * pos.lot * pip_value
+                pos.closed_at, pos.pnl, pos.reason = now, pnl, "sl"
+                balance += pnl; closed_trades.append(pos)
+            else:
+                still_open.append(pos)
+        open_positions = still_open
+
+        # ── uus scalp-signaal (täitub JÄRGMISE baari open hinnaga) ──
+        range5 = high - low
+        if range5 > 20 and not news_blackout and len(open_positions) < 2:
+            lot = max(0.01, (balance / account_balance) * 0.01)
+            lot = round(round(lot / 0.01) * 0.01, 2)
+            next_open = float(df5.iloc[i + 1]["open"])
+            if effective_trend == "bull" and low < close - 5:
+                tp, sl = round(next_open + 12, 2), round(next_open - 25, 2)
+                open_positions.append(Trade("buy", next_open, tp, sl, lot, df5.index[i + 1]))
+            elif effective_trend == "bear" and high > close + 5:
+                tp, sl = round(next_open - 12, 2), round(next_open + 25, 2)
+                open_positions.append(Trade("sell", next_open, tp, sl, lot, df5.index[i + 1]))
+
+        floating = sum(
+            (close - p.entry) * p.lot * pip_value if p.direction == "buy" else (p.entry - close) * p.lot * pip_value
+            for p in open_positions)
+        equity_points.append((now, balance + floating))
+
+    equity = pd.Series({t: v for t, v in equity_points}).sort_index()
+    return {"trades": closed_trades, "equity": equity, "final_balance": balance}
+
+
 # ─────────────────────────────────────────────────────────
 #  STATISTIKA
 # ─────────────────────────────────────────────────────────
@@ -410,17 +540,31 @@ def print_report(name, stats):
         print(f"    {d:5s}  n={v['n']:4d}  sum={v['sum']:+.2f}")
 
 
+def resample_to_h1(df5):
+    """M5 -> H1 agregeerimine (grid-strateegia jaoks, mis töötab tunnigraafikul)."""
+    h1 = df5.resample("1h", label="left", closed="left").agg(
+        {"open": "first", "high": "max", "low": "min", "close": "last"})
+    return h1.dropna()
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--csv", help="OHLC CSV fail (time,open,high,low,close). Ilma selleta jookseb self-test süntetilistel andmetel.")
     ap.add_argument("--balance", type=float, default=200.0)
     ap.add_argument("--compare", action="store_true", help="Võrdle praegust (fikseeritud TP/SL+grid) vs. adaptiivset (ATR-põhine) konfiguratsiooni.")
+    ap.add_argument("--m5", action="store_true", help="--csv sisaldab M5 andmeid: agregeeri H1-ks grid jaoks JA jooksuta scalp-kihi backtest otse M5 peal.")
     args = ap.parse_args()
 
     if args.csv:
-        df = load_ohlc_csv(args.csv)
-        label = f"PÄRIS ANDMED: {args.csv} ({len(df)} küünalt, {df.index[0].date()} → {df.index[-1].date()})"
+        raw = load_ohlc_csv(args.csv)
+        if args.m5:
+            df = resample_to_h1(raw)
+            label = f"PÄRIS ANDMED (M5 -> H1 agregeeritud): {args.csv} ({len(raw)} M5 küünalt -> {len(df)} H1 küünalt, {df.index[0].date()} → {df.index[-1].date()})"
+        else:
+            df = raw
+            label = f"PÄRIS ANDMED: {args.csv} ({len(df)} küünalt, {df.index[0].date()} → {df.index[-1].date()})"
     else:
+        raw = None
         df = make_synthetic_ohlc()
         label = f"⚠️  SELF-TEST — SÜNTEETILINE hinnarida ({len(df)} küünalt). See EI VALIDEERI reaalset turukäitumist, ainult mootori enda tööd. Kasuta --csv päris ajalooliste andmetega reaalse hinnangu jaoks."
     print(label)
@@ -432,20 +576,31 @@ def main():
 
     result = simulate_gold_grid(df, grid_cfg=current_cfg, account_balance=args.balance)
     stats = compute_stats(result, args.balance)
-    print_report("PRAEGUNE (fikseeritud $30/$45 TP/SL, fikseeritud grid-samm, ADX-filter väljas)", stats)
+    print_report("GRID — PRAEGUNE (fikseeritud $30/$45 TP/SL, fikseeritud grid-samm, ADX-filter väljas)", stats)
 
     if args.compare:
         scenarios = [
-            ("+ ATR-adaptiivne TP/SL", {"dynamic_tp_sl": True}),
-            ("+ ATR-adaptiivne grid-samm", {"dynamic_grid_size": True}),
-            ("+ ADX choppiness-filter", {"adx_filter": True}),
-            ("+ KÕIK KOLM koos", {"dynamic_tp_sl": True, "dynamic_grid_size": True, "adx_filter": True}),
+            ("GRID — + ATR-adaptiivne TP/SL", {"dynamic_tp_sl": True}),
+            ("GRID — + ATR-adaptiivne grid-samm", {"dynamic_grid_size": True}),
+            ("GRID — + ADX choppiness-filter", {"adx_filter": True}),
+            ("GRID — + KÕIK KOLM koos", {"dynamic_tp_sl": True, "dynamic_grid_size": True, "adx_filter": True}),
         ]
         for name, overrides in scenarios:
             cfg = copy.deepcopy(current_cfg)
             cfg.update(overrides)
             res = simulate_gold_grid(df, grid_cfg=cfg, account_balance=args.balance)
             print_report(name, compute_stats(res, args.balance))
+
+    if args.m5 and raw is not None:
+        scalp_cfg_off = copy.deepcopy(DEFAULT_GRID_CONFIG)
+        scalp_cfg_off["news_filter"] = False
+        res_off = simulate_scalp_layer(raw, grid_cfg=scalp_cfg_off, account_balance=args.balance)
+        print_report("SCALP (M5) — uudiste-filter VÄLJAS (vana käitumine)", compute_stats(res_off, args.balance))
+
+        scalp_cfg_on = copy.deepcopy(DEFAULT_GRID_CONFIG)
+        scalp_cfg_on["news_filter"] = True
+        res_on = simulate_scalp_layer(raw, grid_cfg=scalp_cfg_on, account_balance=args.balance)
+        print_report("SCALP (M5) — uudiste-filter SEES (uus, vaikimisi)", compute_stats(res_on, args.balance))
 
     if not args.csv:
         print(f"\n{'='*60}\nMEELESPEA: ülal olevad numbrid on süntetilistel andmetel, mitte päris")
