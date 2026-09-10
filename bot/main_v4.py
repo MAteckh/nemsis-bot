@@ -15,6 +15,7 @@ import numpy as np
 
 from config import INSTRUMENTS, MEANREV_CONFIG, GRID_CONFIG
 from strategy_meanrev import MeanRevStrategy
+import gold_logic
 import mt5_connector as ct
 
 # ── Env vars ─────────────────────────────────────────────
@@ -396,48 +397,24 @@ def check_price_frozen(price, window=10):
 def get_trend(df):
     period = GRID_CONFIG["trend_period"]
     thresh = INSTRUMENTS["XAUUSD"]["trend_thresh"]
-    if df is None or len(df) < period+2: return "neutral"
-    now = float(df["close"].iloc[-1])
-    ago = float(df["close"].iloc[-period-1])
-    chg = (now-ago)/ago*100
-    if chg > thresh: return "bull"
-    if chg < -thresh: return "bear"
-    return "neutral"
+    return gold_logic.get_trend(df, period, thresh)
 
 def calc_atr_gold(df):
-    if len(df) < 15: return 1.0
-    hl = df["high"] - df["low"]
-    hc = (df["high"] - df["close"].shift()).abs()
-    lc = (df["low"]  - df["close"].shift()).abs()
-    tr = pd.concat([hl,hc,lc],axis=1).max(axis=1)
-    atr = float(tr.tail(14).mean())
+    atr = gold_logic.calc_atr(df, period=14)
     _atr_history.append(atr)
     if len(_atr_history) > 100: _atr_history.pop(0)
     return atr
 
 def get_vol_mult():
-    if len(_atr_history) < GRID_CONFIG["vol_thresh"]: return 1.0
-    avg = sum(_atr_history[-20:])/20
-    cur = _atr_history[-1]
-    return GRID_CONFIG["vol_boost"] if cur > avg*GRID_CONFIG["vol_thresh"] else 1.0
+    return gold_logic.get_vol_mult(_atr_history, GRID_CONFIG)
 
 def get_compound_lot(balance):
-    base = round(max(0.01, (balance/ACCOUNT_BALANCE)*0.01), 2)
-    lot = round(base * get_vol_mult(), 2)
-    # Astmeline lot-kasv (Design A) — kasutatakse, kui lot_tiers on config's
-    # olemas (praegu on, live VPS peal). Fikseeritud max_lot jääb fallback'iks.
-    if "lot_tiers" in GRID_CONFIG:
-        tier_lot = GRID_CONFIG["lot_tiers"][0][1]
-        for threshold, l in GRID_CONFIG["lot_tiers"]:
-            if balance >= threshold:
-                tier_lot = l
-        return round(tier_lot * get_vol_mult(), 2)
     # KAITSE: lot ülempiir — varem kasvas see piiramatult koos balance'iga,
     # mis 19 Aug backtestis (päris H1 andmed, 2a) oli reaalne põhjus, miks
     # vanad parameetrid (trend_thresh=0.1%) konto lõpuks tühjaks tegid, mitte
     # grid-strateegia enda loogika. Fikseeritud lot'iga sama strateegia oli
     # kasumlik ja stabiilne mõlemal poolel train/test jaotusest.
-    return min(lot, GRID_CONFIG["max_lot"])
+    return gold_logic.get_compound_lot(balance, ACCOUNT_BALANCE, _atr_history, GRID_CONFIG)
 
 def get_scaled_max_float(balance):
     """Max floating loss skaleerub koos kontoga."""
@@ -457,16 +434,6 @@ def save_grid_state(state):
         sb_upsert("bot_state", {"id": 1, "risk": risk})
     except Exception as e:
         logger.error(f"save_grid: {e}")
-
-def setup_grid(center, trend):
-    gs = INSTRUMENTS["XAUUSD"]["grid_size"]
-    gl = GRID_CONFIG["levels"]
-    p = {}
-    if trend in ("bull","neutral"):
-        for i in range(1, gl+1): p[str(round(center-i*gs,2))] = "buy"
-    if trend in ("bear","neutral"):
-        for i in range(1, gl+1): p[str(round(center+i*gs,2))] = "sell"
-    return p
 
 def get_gold_positions():
     return sb_select("signals", "executed=eq.false&regime=eq.grid&order=created_at.asc")
@@ -556,42 +523,11 @@ def get_account_equity():
 
 
 def get_swing_levels(df, lookback=20):
-    """
-    Tagasta viimase `lookback` küünla swing low ja swing high.
-    Kasutatakse SL-i paigutamiseks päris tugi/vastupanu taseme taha.
-    """
-    try:
-        if df is None or len(df) < lookback:
-            return None, None
-        recent = df.tail(lookback)
-        return float(recent["low"].min()), float(recent["high"].max())
-    except Exception:
-        return None, None
+    return gold_logic.get_swing_levels(df, lookback)
 
 
 def calc_gold_tp_sl(direction, level, atr, swing_low, swing_high):
-    """
-    ATR-põhine TP + swing-põhine SL.
-    TP = 2x ATR (min $30, max $100)
-    SL = swing tase + $10 puhver, max $80 kaugusel
-    """
-    tp_dist = max(30.0, min(100.0, 2.0 * atr))
-    sl_max  = 80.0
-    buf     = 10.0
-
-    if direction == "buy":
-        tp = round(level + tp_dist, 2)
-        if swing_low is not None and level - swing_low + buf <= sl_max and swing_low < level:
-            sl = round(swing_low - buf, 2)
-        else:
-            sl = round(level - sl_max, 2)
-    else:
-        tp = round(level - tp_dist, 2)
-        if swing_high is not None and swing_high - level + buf <= sl_max and swing_high > level:
-            sl = round(swing_high + buf, 2)
-        else:
-            sl = round(level + sl_max, 2)
-    return tp, sl
+    return gold_logic.calc_gold_tp_sl(direction, level, atr, swing_low, swing_high, GRID_CONFIG)
 
 
 def send_grid_signals(center, trend, gs, tp_dist, sl_dist, lot):
@@ -712,6 +648,22 @@ def run_gold_grid(price, high, low, now):
     atr_val = _atr_history[-1] if _atr_history else 20.0
     session = "london" if 7 <= now.hour < 13 else "new_york" if 13 <= now.hour < 20 else "asia"
     bias = "neutral"  # Claude AI väljas — puhas tehniline trend
+
+    # ATR-põhine adaptiivne grid-samm — vaikimisi väljas, vt config.py
+    effective_gs = gold_logic.get_dynamic_grid_size(atr_val, GRID_CONFIG) if GRID_CONFIG.get("dynamic_grid_size") else gs
+
+    # Uudiste-aken (Fed/NFP) — blokeerib ainult UUTE positsioonide avamist,
+    # olemasolevate TP/SL/float-stop/trendipöörde haldus jätkub tavapäraselt.
+    news_blackout = GRID_CONFIG.get("news_filter", True) and gold_logic.is_news_blackout(now)
+
+    # ADX choppiness-filter — blokeerib ainult UUE grid'i avamist, mitte
+    # olemasoleva haldust. Vt config.py kommentaar: backtest näitas
+    # trend_reset'i (grid avatud, trend kohe ümber pööranud) suurimaks
+    # üksikuks kahjumi-allikaks madala-trendi (chop) turul.
+    adx_ok = True
+    if GRID_CONFIG.get("adx_filter", False) and df is not None and len(df) >= 28:
+        adx_ok = gold_logic.calc_adx(df["high"], df["low"], df["close"]) >= GRID_CONFIG.get("adx_min", 20.0)
+
     # KAITSE: trend loeb alles siis kui 3 järjestikust scanni sama — väldib flip-flop müra
     global _trend_history
     _trend_history.append(trend)
@@ -726,13 +678,13 @@ def run_gold_grid(price, high, low, now):
     add_log(f"🔍 Grid state: {grid_state is not None} | trend:{effective_trend} | pending:{len(grid_state.get('pending',{})) if grid_state else 0}")
 
     if grid_state is None:
-        if effective_trend == "neutral": return
-        center  = round(price/gs)*gs
-        pending = setup_grid(center, effective_trend)
+        if effective_trend == "neutral" or news_blackout or not adx_ok: return
+        center  = round(price/effective_gs)*effective_gs
+        pending = gold_logic.setup_grid(center, effective_trend, effective_gs, gl)
         save_grid_state({"center":center,"trend":effective_trend,"pending":pending})
         add_log(f"🔲 Gold grid initsialiseeritud @ ${center:.0f} | {effective_trend}")
         # Saada XTrend signaalid käsitsi sisestamiseks
-        send_grid_signals(center, effective_trend, gs, 30.0, 45.0, get_compound_lot(balance))
+        send_grid_signals(center, effective_trend, effective_gs, 30.0, 45.0, get_compound_lot(balance))
         return
 
     pending    = grid_state.get("pending", {})
@@ -740,11 +692,12 @@ def run_gold_grid(price, high, low, now):
     grid_center = grid_state.get("center", grid_state.get("grid", {}).get("center", price))
 
     # Auto-reset kui hind on liiga kaugel grid keskusest (3x grid size)
-    if abs(price - grid_center) > gs * 3 and len(ct.get_open_positions("XAUUSD")) == 0:
-        new_c = round(price/gs)*gs
-        save_grid_state({"center":new_c,"trend":effective_trend if effective_trend != "neutral" else grid_trend,"pending":setup_grid(new_c, effective_trend if effective_trend != "neutral" else grid_trend)})
+    if abs(price - grid_center) > effective_gs * 3 and len(ct.get_open_positions("XAUUSD")) == 0 and adx_ok:
+        new_c = round(price/effective_gs)*effective_gs
+        reset_trend = effective_trend if effective_trend != "neutral" else grid_trend
+        save_grid_state({"center":new_c,"trend":reset_trend,"pending":gold_logic.setup_grid(new_c, reset_trend, effective_gs, gl)})
         add_log(f"🔄 Grid auto-reset: hind ${price:.0f} kaugel keskusest ${grid_center:.0f}")
-        send_grid_signals(new_c, effective_trend if effective_trend != "neutral" else grid_trend, gs, 30.0, 45.0, get_compound_lot(balance))
+        send_grid_signals(new_c, reset_trend, effective_gs, 30.0, 45.0, get_compound_lot(balance))
         return
 
     if effective_trend != grid_trend and effective_trend != "neutral":
@@ -776,10 +729,17 @@ def run_gold_grid(price, high, low, now):
                 balance = round(balance+fl, 2)
                 sb_upsert("signals", {"id":pos["id"],"executed":True})
                 sb_upsert("bot_state", {"id":1,"balance":balance})
-        new_c = round(price/gs)*gs
-        save_grid_state({"center":new_c,"trend":effective_trend,"pending":setup_grid(new_c, effective_trend)})
-        add_log(f"🔄 Gold grid reset: {grid_trend}→{effective_trend}")
-        send_grid_signals(new_c, effective_trend, gs, 30.0, 45.0, get_compound_lot(balance))
+        if adx_ok:
+            new_c = round(price/effective_gs)*effective_gs
+            save_grid_state({"center":new_c,"trend":effective_trend,"pending":gold_logic.setup_grid(new_c, effective_trend, effective_gs, gl)})
+            add_log(f"🔄 Gold grid reset: {grid_trend}→{effective_trend}")
+            send_grid_signals(new_c, effective_trend, effective_gs, 30.0, 45.0, get_compound_lot(balance))
+        else:
+            # ADX liiga madal uue grid'i jaoks — sulge vastutrendi positsioonid
+            # (juba tehtud ülal), aga ÄRA ava uut suunda enne kui trend
+            # reaalselt kinnitub (ADX tõuseb). Järgmine scan proovib uuesti.
+            save_grid_state(None)
+            add_log(f"⏸ Gold grid: {grid_trend}→{effective_trend} suletud, uut ei avata (ADX liiga madal / chop)")
         return
 
     open_pos = get_gold_positions()
@@ -823,7 +783,7 @@ def run_gold_grid(price, high, low, now):
                 add_log(f"🛡 Gold float stop: {d.upper()} @ {entry:.0f}  {fl:+.2f}€")
 
     triggered = []
-    for level_str, direction in list(pending.items()):
+    for level_str, direction in ([] if news_blackout else list(pending.items())):
         level = float(level_str)
         if effective_trend == "neutral": continue
         if effective_trend=="bull" and direction=="sell": continue
@@ -837,8 +797,12 @@ def run_gold_grid(price, high, low, now):
         # pending-taseme (level) pealt — order on market order, mis täitub
         # kohese turuhinnaga, mis võib vanast level'ist kaugel olla, kui
         # pending tase jäi Supabase'i seisma (nt bot restart vahepeal).
-        tp = round(price + 30.0 if direction=="buy" else price - 30.0, 2)
-        sl = round(price - 45.0 if direction=="buy" else price + 45.0, 2)
+        if GRID_CONFIG.get("dynamic_tp_sl"):
+            swing_low, swing_high = gold_logic.get_swing_levels(df, lookback=20)
+            tp, sl = gold_logic.calc_gold_tp_sl(direction, price, atr_val, swing_low, swing_high, GRID_CONFIG)
+        else:
+            tp = round(price + 30.0 if direction=="buy" else price - 30.0, 2)
+            sl = round(price - 45.0 if direction=="buy" else price + 45.0, 2)
         # KAITSE 1: max 3 lahtist positsiooni (variant C — backtest +422€/kuu)
         open_now = ct.get_open_positions("XAUUSD")
         if len(open_now) >= 3:
@@ -868,7 +832,7 @@ def run_gold_grid(price, high, low, now):
             "direction":direction,"entry":price,"tp":tp,
             "sl":sl,
             "lot":lot,"regime":"grid","session":f"gold_{effective_trend}",
-            "executed":False,"breakeven":False,"atr":gs,"score":0,"rr":3.0,
+            "executed":False,"breakeven":False,"atr":effective_gs,"score":0,"rr":3.0,
             "mt5_ticket": order_result.get("orderId"),
         })
         triggered.append(level_str)
@@ -903,7 +867,7 @@ def run_gold_grid(price, high, low, now):
             # kaotav) -> $12/$25 (67,6% vajalik, testitud 69,9% M5 reaalandmetel,
             # märts-august 2026, kasumlik mõlemal poolaastal eraldi, ei läinud
             # kordagi miinusesse). Serv on ikka õhuke - jälgi jätkuvalt.
-            if range5 > 20:
+            if range5 > 20 and not news_blackout:
                 scalp_positions = [p for p in get_gold_positions() if p.get("session","").startswith("scalp")]
                 if len(scalp_positions) < 2:  # max 2 scalp positsiooni
                     lot_scalp = round(round(max(0.01, (balance/ACCOUNT_BALANCE)*0.01) / 0.01) * 0.01, 2)

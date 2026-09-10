@@ -6,6 +6,7 @@ Bollinger + RSI + ADX + Aasia sessioon
 import numpy as np
 import pandas as pd
 from datetime import datetime, timezone
+from gold_logic import calc_adx
 
 def is_asian_session(now):
     h = now.hour
@@ -25,23 +26,6 @@ def calc_rsi(closes, period=14):
     losses = -deltas[deltas < 0].sum() / period
     if losses == 0: return 100.0
     return 100 - (100 / (1 + gains/losses))
-
-def calc_adx(highs, lows, closes, period=14):
-    if len(closes) < period*2: return 50.0
-    h = np.array(highs[-period*2:])
-    l = np.array(lows[-period*2:])
-    c = np.array(closes[-period*2:])
-    tr    = np.maximum(h[1:]-l[1:], np.maximum(abs(h[1:]-c[:-1]), abs(l[1:]-c[:-1])))
-    up    = h[1:] - h[:-1]
-    down  = l[:-1] - l[1:]
-    dmp   = np.where((up > down) & (up > 0), up, 0.0)[-period:]
-    dmm   = np.where((down > up) & (down > 0), down, 0.0)[-period:]
-    atr   = tr[-period:].mean()
-    if atr == 0: return 50.0
-    dip   = 100 * dmp.mean() / atr
-    dim   = 100 * dmm.mean() / atr
-    if dip + dim == 0: return 50.0
-    return 100 * abs(dip - dim) / (dip + dim)
 
 class MeanRevStrategy:
     def __init__(self, symbol, cfg, mr_cfg, logger, add_log, send_telegram,

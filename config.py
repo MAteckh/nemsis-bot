@@ -186,4 +186,49 @@ GRID_CONFIG = {
         (3200, 0.08),
         (6400, 0.13),
     ],
+
+    # ── Uudiste filter (10 Sept 2026) ────────────────────────
+    # Forex mean reversion strateegial oli Fed/NFP blackout juba ammu olemas,
+    # gold grid'il seni üldse mitte — kuld reageerib dollari intressiotsustele
+    # vähemalt sama tugevalt. Puhas riskimaandus, ei muuda signaali loogikat,
+    # ainult ei ava UUSI positsioone teadaolevas kõrge-volatiilsuse aknas.
+    "news_filter": True,
+
+    # ── ATR-põhine adaptiivne TP/SL (10 Sept 2026) ───────────
+    # calc_gold_tp_sl() eksisteeris main_v4.py-s juba varem, aga polnud
+    # KUNAGI reaalselt kasutusel — order placement kasutas alati fikseeritud
+    # $30 TP / $45 SL, sõltumata sellest, kas ATR oli $8 (vaikne turg) või
+    # $35 (uudiste järgne volatiilsus). VAIKIMISI VÄLJAS, kuni on testitud
+    # päris ajaloolistel andmetel (vt bot/backtest.py) — see muudab reaalset
+    # kauplemiskäitumist ja seda ei tohi lülitada sisse ilma backtestita.
+    "dynamic_tp_sl":  False,
+    "tp_atr_mult":    2.0,
+    "tp_min":         30.0,
+    "tp_max":         100.0,
+    "sl_buffer":      10.0,
+    "sl_max":         80.0,
+
+    # ── ATR-põhine adaptiivne grid-samm (10 Sept 2026) ───────
+    # Fikseeritud $15 samm on rahulikul turul liiga tihe (positsioonid
+    # koonduvad samasse liikumisse = korreleeritud risk) ja kiirel turul
+    # liiga lai. VAIKIMISI VÄLJAS samal põhjusel kui eespool — muudab
+    # kauplemissagedust/riski otseselt, vajab backtest-kinnitust enne live'i.
+    "dynamic_grid_size": False,
+    "grid_atr_mult":     0.75,
+    "grid_size_min":     10.0,
+    "grid_size_max":     30.0,
+
+    # ── ADX choppiness-filter (10 Sept 2026) ─────────────────
+    # Backtest (bot/backtest.py) näitas, et suurim üksik kahjumi-allikas
+    # on trend_reset — grid avatakse ühes suunas, hind keerab kohe ümber,
+    # positsioon suletakse kahjumis, uus grid avatakse vastassuunas, jne.
+    # See on täpselt see, mida ADX mõõdab (trendi TUGEVUS, mitte suund) —
+    # forex mean reversion strateegial on ADX-filter juba ammu kasutusel
+    # (vastupidises suunas: ADX kõrge = ei kaubelda, sest see on
+    # trend-strateegiale mean-reversion vaenulik). Kullale on loogika
+    # vastupidine: trend-grid vajab PÄRIS trendi, mitte müra — seega
+    # blokeeri uue grid'i avamine, kui ADX on liiga madal (chop).
+    # VAIKIMISI VÄLJAS, kuni backtest päris ajalooliste andmetega kinnitab.
+    "adx_filter": False,
+    "adx_min":    20.0,
 }
