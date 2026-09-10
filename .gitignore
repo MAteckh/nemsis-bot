@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+
+# Ajaloolised hinnaandmed backtest.py jaoks — reaalsed broker/andmeteenuse
+# eksportid, ei kuulu koodi versioonihaldusesse (suured, muutuvad, isiklikud).
+bot/data/
