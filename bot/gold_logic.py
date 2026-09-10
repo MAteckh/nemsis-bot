@@ -63,6 +63,22 @@ def get_compound_lot(balance, account_balance, atr_history, cfg):
     return min(lot, cfg["max_lot"])
 
 
+def get_risk_based_lot(balance, sl_distance, pip_value, risk_pct, min_lot=0.01, max_lot=0.5):
+    """
+    Riski-põhine lot: riski fikseeritud % kontost tehingu kohta, mitte
+    fikseeritud balance-tiiritud lot (get_compound_lot). Backtest (2026
+    märts-august XAUUSD) näitas, et fikseeritud lot-põrand (0.01, ei vähene
+    kunagi) koos korduvate kaotusseeriatega viib mitmekordse konto-ruumini
+    pika aja peale — see funktsioon suurus väheneb koos balance'iga, mitte
+    ei jää lakkamatult samale tasemele.
+    """
+    if sl_distance <= 0:
+        return min_lot
+    risk_amount = balance * risk_pct
+    lot = risk_amount / (sl_distance * pip_value)
+    return max(min_lot, min(round(lot, 3), max_lot))
+
+
 def get_dynamic_grid_size(atr, cfg):
     """
     Grid-sammu skaleerimine ATR järgi — vaikimisi VÄLJAS (grid_cfg["dynamic_grid_size"]).

@@ -328,7 +328,13 @@ def simulate_gold_grid(df, grid_cfg=None, instrument_cfg=None, account_balance=2
                     else:
                         tp = round(price + 30.0 if direction == "buy" else price - 30.0, 2)
                         sl = round(price - 45.0 if direction == "buy" else price + 45.0, 2)
-                    open_positions.append(Trade(direction, price, tp, sl, lot, now))
+                    if grid_cfg.get("risk_based_lot"):
+                        order_lot = gold_logic.get_risk_based_lot(
+                            balance, abs(price - sl), pip_value,
+                            grid_cfg.get("risk_pct", 0.015), max_lot=grid_cfg.get("risk_lot_max", 0.5))
+                    else:
+                        order_lot = lot
+                    open_positions.append(Trade(direction, price, tp, sl, order_lot, now))
                     last_order_bar = i
                     del pending[level_str]
 
@@ -446,15 +452,24 @@ def simulate_scalp_layer(df5, grid_cfg=None, instrument_cfg=None, account_balanc
 
         # ── uus scalp-signaal (täitub JÄRGMISE baari open hinnaga) ──
         range5 = high - low
-        if range5 > 20 and not news_blackout and len(open_positions) < 2:
-            lot = max(0.01, (balance / account_balance) * 0.01)
-            lot = round(round(lot / 0.01) * 0.01, 2)
+        min_range = grid_cfg.get("scalp_min_range", 20.0)
+        scalp_tp = grid_cfg.get("scalp_tp", 12.0)
+        scalp_sl = grid_cfg.get("scalp_sl", 25.0)
+        offset = grid_cfg.get("scalp_offset", 5.0)
+        if range5 > min_range and not news_blackout and len(open_positions) < 2:
+            if grid_cfg.get("risk_based_lot"):
+                lot = gold_logic.get_risk_based_lot(
+                    balance, scalp_sl, pip_value,
+                    grid_cfg.get("risk_pct", 0.015), max_lot=grid_cfg.get("risk_lot_max", 0.5))
+            else:
+                lot = max(0.01, (balance / account_balance) * 0.01)
+                lot = round(round(lot / 0.01) * 0.01, 2)
             next_open = float(df5.iloc[i + 1]["open"])
-            if effective_trend == "bull" and low < close - 5:
-                tp, sl = round(next_open + 12, 2), round(next_open - 25, 2)
+            if effective_trend == "bull" and low < close - offset:
+                tp, sl = round(next_open + scalp_tp, 2), round(next_open - scalp_sl, 2)
                 open_positions.append(Trade("buy", next_open, tp, sl, lot, df5.index[i + 1]))
-            elif effective_trend == "bear" and high > close + 5:
-                tp, sl = round(next_open - 12, 2), round(next_open + 25, 2)
+            elif effective_trend == "bear" and high > close + offset:
+                tp, sl = round(next_open - scalp_tp, 2), round(next_open + scalp_sl, 2)
                 open_positions.append(Trade("sell", next_open, tp, sl, lot, df5.index[i + 1]))
 
         floating = sum(

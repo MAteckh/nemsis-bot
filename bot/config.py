@@ -231,4 +231,27 @@ GRID_CONFIG = {
     # VAIKIMISI VÄLJAS, kuni backtest päris ajalooliste andmetega kinnitab.
     "adx_filter": False,
     "adx_min":    20.0,
+
+    # ── Risk-põhine lot-suurus (10 Sept 2026) ───────────────
+    # get_compound_lot() lot-põrand (0.01, madalaim lot_tiers aste) EI VÄHENE
+    # kunagi, ükskõik kui palju kontot on kaotatud — balti/nädala circuit
+    # breaker peatab UUE positsiooni avamise ajutiselt, aga ei vähenda riski
+    # järgmisel korral, kui kauplemine jätkub. Reaalsel 2026 märts-august
+    # XAUUSD andmestikul viis see korduva kaotusseeria korral konto
+    # mitmekordse "ruumini" (drawdown >100%, mis reaalses kontos tähendaks
+    # marginikõnet ammu enne seda). See lülitab riski % kontost tehingu
+    # kohta (samamoodi nagu strategy_meanrev.py-l juba ammu on), nii et
+    # lot väheneb koos balance'iga, mitte ei jää fikseerituks.
+    # VAIKIMISI VÄLJAS, kuni backtest (bot/backtest.py) kinnitab.
+    "risk_based_lot": False,
+    "risk_pct":       0.015,
+    "risk_lot_max":   0.5,
+
+    # ── Scalp-kihi parameetrid (10 Sept 2026) ───────────────
+    # Toodud config'i, et neid saaks backtest.py's testida ilma koodi
+    # muutmata (varem olid need hard-coded main_v4.py sees).
+    "scalp_min_range": 20.0,
+    "scalp_tp":         12.0,
+    "scalp_sl":         25.0,
+    "scalp_offset":      5.0,
 }
