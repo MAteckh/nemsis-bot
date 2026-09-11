@@ -175,7 +175,11 @@ def simulate_gold_grid(df, grid_cfg=None, instrument_cfg=None, account_balance=2
     paused_week = False
 
     for i in range(min_history, len(df)):
-        window = df.iloc[: i + 1]
+        # Piiratud (mitte kasvav) aken — kõik allolevad funktsioonid vajavad
+        # max ~28 baari ajalugu (ADX). Kasvav df.iloc[:i+1] tegi backtest'i
+        # O(n^2)-ks (iga baar arvutas terve senise ajaloo läbi uuesti) ja
+        # muutis mitmesaja kombinatsiooniga sweep'i praktiliselt jooksmatuks.
+        window = df.iloc[max(0, i - 249): i + 1]
         bar = df.iloc[i]
         now = df.index[i]
         price, high, low = float(bar["close"]), float(bar["high"]), float(bar["low"])
