@@ -1418,9 +1418,15 @@ def main():
             open_all = sb_select("signals", "executed=eq.false")
             gold_pos  = [p for p in open_all if p.get("regime")=="grid"]
             forex_pos = [p for p in open_all if p.get("regime")=="meanrev"]
+            # regime="portfolio" (hajutatud portfell) ja "core_overlay" ei
+            # mahtunud kumbagi ülemisse ämbrisse — ilma selleta ei näidanud
+            # dashboard neid ÜLDSE, ka siis kui nad reaalselt kauplesid.
+            pf_pos = [p for p in open_all if p.get("regime") in ("portfolio", "core_overlay")]
 
             # Detailne positsioonide nimekiri dashboard'i jaoks — päris
             # entry/TP/SL/suund + hetke floating vahe, mitte ainult arv.
+            # Portfelli jalgade hinnad on eri instrumentidel, seega floating'ut
+            # ei saa arvutada kulla hinnast — need näidatakse ilma selleta.
             positions_detail = []
             for p in gold_pos:
                 entry = float(p.get("entry", 0) or 0)
@@ -1435,6 +1441,23 @@ def main():
                     "mt5_ticket":    p.get("mt5_ticket"),
                     "session":       p.get("session"),
                 })
+            for p in pf_pos:
+                positions_detail.append({
+                    "direction":     p.get("direction", "buy"),
+                    "entry":         float(p.get("entry", 0) or 0),
+                    "tp":            p.get("tp"),
+                    "sl":            p.get("sl"),
+                    "floating_diff": None,
+                    "mt5_ticket":    p.get("mt5_ticket"),
+                    "session":       p.get("session"),
+                })
+
+            # Aktiivsed instrumendid — mida bot PÄRISELT kaupleb, mitte kogu
+            # INSTRUMENTS nimekiri (seal on 10 väljalülitatud forex-paari).
+            if GRID_CONFIG.get("portfolio_enabled"):
+                active_syms = [l["name"] for l in GRID_CONFIG.get("portfolio_legs", [])]
+            else:
+                active_syms = [k for k, v in INSTRUMENTS.items() if v.get("enabled")]
 
             sb_upsert("bot_state", {
                 "id": 1, "updated_at": now.isoformat(),
@@ -1445,12 +1468,14 @@ def main():
                     "equity":          round(equity, 2) if equity else balance,
                     "gold_positions":  len(gold_pos),
                     "forex_positions": len(forex_pos),
+                    "portfolio_positions": len(pf_pos),
                     "positions_detail": positions_detail,
                     "scan":            scan_count,
                     "claude_bias":     _claude_cache.get("bias", "neutral"),
                     "claude_reason":   _claude_cache.get("reason", ""),
                     "price":           round(price_gold if price_gold > 0 else 0, 2),
-                    "instruments":     list(INSTRUMENTS.keys()),
+                    "mode":            "portfell" if GRID_CONFIG.get("portfolio_enabled") else GRID_CONFIG.get("strategy_mode", "grid"),
+                    "instruments":     active_syms,
                 }
             })
 

@@ -259,7 +259,21 @@ footer{display:flex;justify-content:space-between;align-items:center;flex-wrap:w
 
 <script>
 const SB='https://xqinzjaqorjqaexeoyqc.supabase.co',KEY='sb_publishable_eGAHjERYuK9ztviFer41CQ_6FouGpQU',S0=101.31
-const I={XAUUSD:{n:'XAU/USD',t:'g',tf:'1h',s:'Trend Grid'}}
+// Instrumentide kirjeldused. t:'g' = kulla-tüüpi hinnavormindus (2 kohta),
+// t:'f' = forex (5 kohta), t:'i' = indeks (2 kohta).
+// Mida bot PÄRISELT kaupleb, tuleb stats.instruments väljalt — see nimekiri
+// annab ainult ilusad nimed. Tundmatu sümbol kuvatakse ikka, vaikeväärtustega.
+const I={
+  XAUUSD:{n:'XAU/USD',t:'g',tf:'1d',s:'Donchian 50'},
+  SPX:   {n:'S&P 500',t:'i',tf:'1d',s:'Bollinger fade'},
+  USDJPY:{n:'USD/JPY',t:'j',tf:'1d',s:'Donchian + EMA200'},
+  EURUSD:{n:'EUR/USD',t:'f',tf:'1d',s:'TS momentum'},
+  GBPUSD:{n:'GBP/USD',t:'f',tf:'1d',s:'TS momentum'},
+  XAGUSD:{n:'XAG/USD',t:'g',tf:'1d',s:'—'}
+}
+const DEF={n:'',t:'f',tf:'1d',s:'—'}
+// f = forex 5 kohta, j = JPY-paar 3 kohta, g/i = kuld/indeks 2 kohta
+const dec=t=>t==='f'?5:t==='j'?3:2
 
 let lastScan=Date.now(),SCAN_MS=900000
 function tick(){const r=Math.max(0,SCAN_MS-(Date.now()-lastScan));const m=Math.floor(r/60000),s=Math.floor((r%60000)/1000);document.getElementById('sv').textContent=m+'m '+String(s).padStart(2,'0')+'s';document.getElementById('sf').style.width=(r/SCAN_MS*100)+'%'}
@@ -285,10 +299,18 @@ async function load(){
     gt.className='growth-tag'+(g<0?' down':'')
     document.getElementById('gpr').textContent=st.price?'$'+parseFloat(st.price).toFixed(2):'—'
     document.getElementById('gt').textContent=st.trend?st.trend.toUpperCase():'—'
-    const gpos=(pos||[]).filter(p=>p.regime==='grid')
-    document.getElementById('gp').textContent=gpos.length
-    document.getElementById('pc').textContent=gpos.length+' avatud'
-    document.getElementById('ic').textContent='1 / 1 aktiivne'
+    // KÕIK avatud positsioonid, mitte ainult vana grid. Portfelli jalgadel on
+    // regime='portfolio' ja session='pf_XAUUSD' jne — varem jäid need täiesti
+    // nähtamatuks, ka siis kui nad reaalselt kauplesid.
+    const allpos=(pos||[])
+    const symOf=p=>p.regime==='grid'?'XAUUSD'
+      :(p.session||'').startsWith('pf_')?p.session.slice(3)
+      :p.session==='core'||p.session==='overlay'?'XAUUSD'
+      :(p.session||'—')
+    const active=(st.instruments&&st.instruments.length?st.instruments:Object.keys(I))
+    document.getElementById('gp').textContent=allpos.length
+    document.getElementById('pc').textContent=allpos.length+' avatud'
+    document.getElementById('ic').textContent=active.length+' / '+active.length+' aktiivne'
     const bias=st.claude_bias||'neutral'
     const biasEt=bias==='buy'?'Ostuseis':bias==='sell'?'Müügiseis':'Neutraalne'
     document.getElementById('ab').textContent='Turu lugemine · '+biasEt
@@ -296,8 +318,9 @@ async function load(){
     document.getElementById('st').textContent='SÜSTEEM AKTIIVNE'
     lastScan=Date.now()
 
-    document.getElementById('ig').innerHTML=Object.entries(I).map(([sym,info])=>{
-      const isG=info.t==='g',sp=isG?gpos.length:(pos||[]).filter(p=>p.session===sym).length
+    document.getElementById('ig').innerHTML=active.map(sym=>{
+      const info=I[sym]||{...DEF,n:sym}
+      const isG=sym==='XAUUSD',sp=allpos.filter(p=>symOf(p)===sym).length
       const price=isG&&st.price?'$'+parseFloat(st.price).toFixed(2):'—'
       const trend=isG?(st.trend||'neutral'):'ranging'
       const bc=trend==='bull'?'bull':trend==='bear'?'bear':trend==='ranging'?'rng':'neu'
@@ -306,16 +329,21 @@ async function load(){
     }).join('')
 
     const pb=document.getElementById('pb')
-    if(!gpos.length){pb.innerHTML='<div class="gcard emptybox">Aktiivseid positsioone pole</div>'}
-    else pb.innerHTML=gpos.map(p=>{
-      const sym=p.regime==='grid'?'XAUUSD':(p.session||'—');const isG=p.regime==='grid';const fmt=v=>isG?parseFloat(v||0).toFixed(2):parseFloat(v||0).toFixed(5)
+    if(!allpos.length){pb.innerHTML='<div class="gcard emptybox">Aktiivseid positsioone pole</div>'}
+    else pb.innerHTML=allpos.map(p=>{
+      const sym=symOf(p),info=I[sym]||DEF,d=dec(info.t)
+      const fmt=v=>v==null||v===''?'—':parseFloat(v).toFixed(d)
+      // Floating P&L saab näidata ainult kullal — ainus instrument, mille
+      // hetkehind stats'is on. Teiste jalgade puhul jääb lahter tühjaks,
+      // mitte ei näidata valet numbrit kulla hinna pealt.
       let plTxt='—',plCls=''
-      if(isG&&st.price&&p.entry){
+      if(sym==='XAUUSD'&&st.price&&p.entry){
         const diff=p.direction==='buy'?(+st.price-+p.entry):(+p.entry-+st.price)
         plTxt=(diff>=0?'+':'')+diff.toFixed(2)
         plCls=diff>=0?'pos':'neg'
       }
-      return`<div class="gcard poscard"><div class="pos-dir ${p.direction}">${p.direction==='buy'?'▲ OST':'▼ MÜÜK'}</div><div class="pos-sym">${sym}</div><div class="pos-path">${fmt(p.entry)}<span class="arrow">→</span><span class="tp">${fmt(p.tp)}</span>${p.sl?`<span class="arrow">/</span><span class="sl">${fmt(p.sl)}</span>`:''}</div><div class="pos-meta">lot ${p.lot||'0.01'} · 1h</div><div class="pos-pl ${plCls}">${plTxt}</div></div>`
+      const tag=p.regime==='portfolio'?'portfell':p.session==='core'?'tuumik':p.session==='overlay'?'ülekiht':'grid'
+      return`<div class="gcard poscard"><div class="pos-dir ${p.direction}">${p.direction==='buy'?'▲ OST':'▼ MÜÜK'}</div><div class="pos-sym">${info.n||sym}</div><div class="pos-path">${fmt(p.entry)}<span class="arrow">→</span><span class="tp">${fmt(p.tp)}</span>${p.sl?`<span class="arrow">/</span><span class="sl">${fmt(p.sl)}</span>`:''}</div><div class="pos-meta">lot ${p.lot||'0.01'} · ${tag}</div><div class="pos-pl ${plCls}">${plTxt}</div></div>`
     }).join('')
 
     const lw=document.getElementById('lw')
