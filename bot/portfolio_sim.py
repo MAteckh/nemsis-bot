@@ -97,7 +97,13 @@ def run(legs, rates, balance0=214.0,
             rr = float(rates.asof(p.opened))
             fin = NOTIONAL[p.sym](p.lot, p.entry) * (rr + MK) * days / 365.0
             bal += pnl - SPREAD[p.sym] * (p.lot / 0.01) - fin
-            closed.append((p.sym, pnl, why, days))
+            # Salvesta ka R-kordne ja suurusarvutuse sisendid, et
+            # havimisriski bootstrap saaks sama tehingu teises jarjekorras
+            # ja teise balansi juures uuesti labi mangida.
+            closed.append(dict(sym=p.sym, pnl=pnl, why=why, days=days,
+                               r=pnl / p.risk if p.risk > 0 else 0.0,
+                               sl_dist=abs(p.entry - p.sl), pv=p.pv,
+                               px=p.entry, rate=rr))
             peak = max(peak, bal); mdd = min(mdd, bal / peak - 1)
         open_pos = still
 
