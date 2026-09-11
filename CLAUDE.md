@@ -51,6 +51,20 @@ Enne kui ütled, et muudatus on valmis:
 - `bot/walkforward.py` — out-of-sample valideerimine
 - `bot/compare.py` — kõigi variantide õun-õuna võrdlus
 
+## SEIS 11. sept 2026 (kust jätkata)
+
+- Konto: BlackBull **525854 LIVE**, balance ~214€. Bot jookseb **VPS-il**,
+  kaust `C:\nemsis-bot`, käivitatud `update.bat`-iga PowerShellis.
+- Deploy käib nüüd **Telegramist: `/update`** (git pull + kompileerimiskontroll
+  + restart). `/restart`, `/status`, `/reset`, `/help` samuti olemas.
+- `main`-i on merge'itud ja pushitud: portfell SEES, vana kulla grid VÄLJAS,
+  vana forex meanrev VÄLJAS.
+- **OOTAB: kasutaja peab saatma `/update`**, et portfell käiku läheks.
+- Esimesel käivitusel jälgi Telegramist `🔎 Sümbol lahendatud: US500` — kui
+  tuleb hoiatus, vajab BlackBulli õiget indeksi nime `portfolio_legs` sees.
+- Andmebaasi vanad rippuvad forex-read (ilma mt5_ticket'ita) on koristatud
+  (executed=true). Kasutaja kinnitas: need EI olnud päris positsioonid.
+
 ## Mida andmed on seni näidanud
 
 - Praegune live-konfiguratsioon: +61€ / 2 aastat, drawdown -81%. Live kinnitab
