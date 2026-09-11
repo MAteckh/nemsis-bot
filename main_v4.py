@@ -96,6 +96,36 @@ def sb_select(table, params=""):
         logger.error(f"SB select: {e}")
         return []
 
+def log_trade_close(pos, pnl, close_price=None, reason="", close_time=None):
+    """
+    Kirjuta suletud tehingu tulemus trades-tabelisse.
+
+    UUS (11 sept 2026): varem ei kirjutatud trades-tabelisse KUNAGI midagi —
+    kõik kuus positsiooni sulgemise haru (gold TP, gold float-stop, gold
+    trend-reset, gold weekend-close, ülekiht TP/SL, portfelli jala TP/SL)
+    ainult märkisid signals-rea executed=True, aga tulemust (pnl, close_price)
+    ei salvestanud kuhugi. Ajalugu oli seetõttu ainult signals-tabelis, kus
+    pole pnl-välja — rahajälge ei saanud tagantjärele kokku panna.
+    """
+    ok = sb_insert("trades", {
+        "ticket":      str(pos.get("mt5_ticket") or pos.get("id")),
+        "direction":   pos.get("direction"),
+        "entry":       pos.get("entry"),
+        "sl":          pos.get("sl"),
+        "tp":          pos.get("tp"),
+        "lot_size":    pos.get("lot"),
+        "open_time":   pos.get("created_at"),
+        "close_price": round(float(close_price), 5) if close_price is not None else None,
+        "close_time":  close_time or datetime.now(timezone.utc).isoformat(),
+        "pnl":         round(float(pnl), 2),
+        "result":      "win" if pnl > 0 else "loss",
+        "regime":      pos.get("regime"),
+        "session":     pos.get("session"),
+    })
+    if not ok:
+        logger.error(f"🚨 trades insert ebaõnnestus (pos {pos.get('id')}, {reason}): pnl={pnl}")
+    return ok
+
 def send_telegram(text):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID: return
     try:
@@ -567,17 +597,34 @@ Vasta AINULT JSON: {{"bias":"buy/sell/neutral","confidence":0-100,"reason":"eest
 def sync_mt5_positions():
     """
     Sünkroniseeri MT5 päris positsioonid Supabase signals-tabeliga.
-    Kui MT5-s on positsioon suletud (TP/SL tabas), märgi Supabase-s executed=True.
+    Kui MT5-s on positsioon suletud (TP/SL tabas), märgi Supabase-s executed=True
+    JA logi päris tulemus trades-tabelisse (varem ei salvestatud kunagi P&L-i).
+    Kui MT5-s on positsioon, mida Supabase üldse ei jälgi, lisa see jälgimisele.
     Tagastab MT5-s lahti olevate ticketite seti.
+
+    UUS (11 sept 2026): varem vaadati ainult regime=grid — portfelli
+    (regime=portfolio) ja tuumik-ülekihi (regime=core_overlay) positsioonid
+    jäid sünkroniseerimisest täiesti välja. Kasutaja avatud tehing oli
+    seetõttu dashboardil "0 avatud positsiooni" kõrval, kuigi floating P&L
+    näitas raha — sync ei teadnud sellest positsioonist üldse.
+
+    Tundmatute positsioonide leidmiseks kasutatakse get_all_positions()'i
+    (KÕIK positsioonid, sõltumata magic-numbrist), mitte get_open_positions()'i
+    (magic=MAGIC filtriga) — käsitsi MT5 terminalis avatud tehingud kannavad
+    tavaliselt magic=0 ja jäid muidu samamoodi nähtamatuks kui bot omal ajal
+    Supabase'ist puudu jäänud positsioonid.
     """
     try:
         mt5_open = ct.get_open_positions()
         mt5_tickets = {p["ticket"] for p in mt5_open}
 
-        # Loe Supabase-st kõik lahti positsioonid (executed=False)
-        sb_open = sb_select("signals", "executed=eq.false&regime=eq.grid")
-        if not sb_open:
-            return mt5_tickets
+        all_open = ct.get_all_positions()
+        all_by_ticket = {p["ticket"]: p for p in all_open}
+        all_tickets = set(all_by_ticket)
+
+        # Loe Supabase-st KÕIK lahti positsioonid, kõigist režiimidest.
+        sb_open = sb_select("signals", "executed=eq.false&regime=in.(grid,portfolio,core_overlay,recovered)")
+        tracked_tickets = {int(p["mt5_ticket"]) for p in sb_open if p.get("mt5_ticket") is not None}
 
         closed_found = False
         for pos in sb_open:
@@ -585,10 +632,44 @@ def sync_mt5_positions():
             if ticket is None:
                 continue  # vanad positsioonid ilma ticketita — jäta rahule
             if int(ticket) not in mt5_tickets:
-                # MT5-s suletud aga Supabase-s lahti — märgi suletuks
+                # MT5-s suletud aga Supabase-s lahti — too PÄRIS tulemus
+                # tehinguajaloost ja logi trades-tabelisse.
+                deal = ct.get_closed_deal_pnl(ticket)
                 sb_upsert("signals", {"id": pos["id"], "executed": True})
-                add_log(f"🔄 Sync: positsioon {ticket} suletud MT5 poolt → Supabase uuendatud")
+                if deal:
+                    ok = log_trade_close(pos, deal["pnl"], deal["close_price"],
+                                         "sync", deal["close_time"])
+                    add_log(f"🔄 Sync: {ticket} suletud, tulemus {deal['pnl']:+.2f}€"
+                            f"{'' if ok else ' (trades salvestus ebaõnnestus!)'}")
+                else:
+                    add_log(f"🔄 Sync: positsioon {ticket} suletud MT5 poolt → Supabase uuendatud (P&L ei leitud)")
                 closed_found = True
+
+        # MT5-s avatud (SÕLTUMATA magic-numbrist — kaasa arvatud käsitsi
+        # avatud tehingud), aga Supabase-s tundmatu positsioon — varem
+        # täiesti nähtamatu. Loo jälgitav kirje, et dashboard ja järgmine
+        # sync sellest edaspidi teaksid. Bot ei halda seda (ei sule, ei
+        # muuda TP/SL) — ainult jälgib ja logib tulemuse, kui see sulgub.
+        for ticket in (all_tickets - tracked_tickets):
+            p = all_by_ticket[ticket]
+            own = p.get("magic") == ct.MAGIC
+            sb_insert("signals", {
+                "direction":  p["direction"],
+                "entry":      p["price_open"],
+                "tp":         p["tp"],
+                "sl":         p["sl"],
+                "lot":        p["volume"],
+                "regime":     "recovered",
+                "session":    f"recovered_{p['symbol']}",
+                "executed":   False,
+                "breakeven":  False,
+                "atr":        0,
+                "score":      0,
+                "mt5_ticket": ticket,
+            })
+            kirjeldus = "boti oma, kadunud Supabase'ist" if own else "käsitsi/muu, magic pole boti"
+            add_log(f"⚠️ Sync: MT5-s tundmatu positsioon {ticket} ({p['symbol']}, {kirjeldus}) leitud — lisatud jälgimisele")
+            send_telegram(f"⚠️ <b>Tundmatu positsioon leitud</b>\n{p['symbol']} #{ticket} ({kirjeldus})\nLisati jälgimisele — bot ei sule seda automaatselt.")
 
         if closed_found:
             # Positsioon suleti broker'i enda TP/SL kaudu, enne kui bot ise jõudis
@@ -754,6 +835,7 @@ def run_gold_core_overlay(price, high, low, now, df):
         lot = float(pos.get("lot") or 0.01)
         pnl = (level - entry) * lot * 100 if d == "buy" else (entry - level) * lot * 100
         sb_upsert("signals", {"id": pos["id"], "executed": True})
+        log_trade_close(pos, pnl, level, f"overlay_{label.lower()}")
         add_log(f"{'✅' if pnl > 0 else '🛑'} Ülekiht {label}: {d.upper()} {entry:.2f}→{level:.2f}  {pnl:+.2f}€")
         send_telegram(f"{'✅' if pnl > 0 else '🛑'} <b>Ülekiht {label}</b>\n{d.upper()} {entry:.2f}→{level:.2f}\n{pnl:+.2f}€")
 
@@ -873,6 +955,7 @@ def run_portfolio_leg(leg, now):
         lot = float(pos.get("lot") or 0.01)
         pnl = (level - entry) * lot * pv if d == "buy" else (entry - level) * lot * pv
         sb_upsert("signals", {"id": pos["id"], "executed": True})
+        log_trade_close(pos, pnl, level, f"portfolio_{label.lower()}")
         add_log(f"{'✅' if pnl > 0 else '🛑'} {name} {label}: {d.upper()} {entry:.4f}→{level:.4f}  {pnl:+.2f}€")
         send_telegram(f"{'✅' if pnl > 0 else '🛑'} <b>{name} {label}</b>\n{d.upper()} {entry:.4f}→{level:.4f}\n{pnl:+.2f}€")
 
@@ -958,6 +1041,7 @@ def run_gold_grid(price, high, low, now):
                     balance = round(balance+fl, 2)
                     sb_upsert("signals", {"id": pos["id"], "executed": True})
                     sb_upsert("bot_state", {"id": 1, "balance": balance})
+                    log_trade_close(pos, fl, price, "weekend")
             add_log(f"🔒 Gold weekend sulgemine — {len(open_pos)} positsiooni suletud")
             send_telegram(f"🔒 <b>Gold weekend sulgemine</b>\n{len(open_pos)} positsiooni suletud enne nädalavahetust")
         return
@@ -1063,6 +1147,7 @@ def run_gold_grid(price, high, low, now):
                 balance = round(balance+fl, 2)
                 sb_upsert("signals", {"id":pos["id"],"executed":True})
                 sb_upsert("bot_state", {"id":1,"balance":balance})
+                log_trade_close(pos, fl, price, "trend_reset")
         if adx_ok:
             new_c = round(price/effective_gs)*effective_gs
             save_grid_state({"center":new_c,"trend":effective_trend,"pending":gold_logic.setup_grid(new_c, effective_trend, effective_gs, gl)})
@@ -1089,6 +1174,7 @@ def run_gold_grid(price, high, low, now):
             balance = round(balance+pnl, 2)
             sb_upsert("signals", {"id":pid,"executed":True})
             sb_upsert("bot_state", {"id":1,"balance":balance})
+            log_trade_close(pos, pnl, tp, "gold_tp")
             add_log(f"✅ Gold TP: {d.upper()} @ {entry:.0f}→{tp:.0f}  +{pnl:.2f}€")
             send_telegram(f"✅ <b>Gold TP!</b>\n{d.upper()} @ {entry:.0f}→{tp:.0f}\n+<b>{pnl:.2f}€</b> | {balance:.2f}€")
             opp = "sell" if d=="buy" else "buy"
@@ -1114,6 +1200,7 @@ def run_gold_grid(price, high, low, now):
                 balance = round(balance+fl, 2)
                 sb_upsert("signals", {"id":pid,"executed":True})
                 sb_upsert("bot_state", {"id":1,"balance":balance})
+                log_trade_close(pos, fl, price, "float_stop")
                 add_log(f"🛡 Gold float stop: {d.upper()} @ {entry:.0f}  {fl:+.2f}€")
 
     triggered = []
@@ -1461,6 +1548,12 @@ def main():
 
             sb_upsert("bot_state", {
                 "id": 1, "updated_at": now.isoformat(),
+                # Ülemine "balance" väli varem kirjutati ainult grid- ja
+                # nädalavahetuse-harudes, mis on portfellirežiimis välja
+                # lülitatud — see jäi külmunuks samal ajal kui stats.balance
+                # allpool oli värske. Kirjuta see nüüd IGA skanni lõpus,
+                # sõltumata režiimist, et üks ega teine väli enam lahku ei läheks.
+                "balance": round(float(balance), 2) if balance else balance,
                 "last_scan": now.strftime("%H:%M:%S UTC"),
                 "log": log_buffer[-30:],
                 "stats": {

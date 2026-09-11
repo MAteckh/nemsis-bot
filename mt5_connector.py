@@ -292,6 +292,46 @@ def get_open_positions(symbol=None):
     return result
 
 
+def get_all_positions(symbol=None):
+    """
+    Tagasta KÕIK lahti positsioonid kontol, SÕLTUMATA magic-numbrist —
+    kaasa arvatud käsitsi MT5 terminalis avatud tehingud. Neil on
+    tavaliselt magic=0, seega get_open_positions() (magic=MAGIC filtriga)
+    ei näe neid KUNAGI.
+
+    Kasutab AINULT sync_mt5_positions() tundmatute positsioonide
+    tuvastamiseks (dashboard'i nähtavus + trades-logi, kui positsioon
+    hiljem sulgub) — bot ei halda neid ise (ei sule, ei muuda TP/SL).
+    Sama väljakuju, mis get_open_positions(), pluss "magic".
+    """
+    if not is_connected():
+        return []
+
+    if symbol:
+        sym = _SYMBOL_MAP.get(symbol, symbol.replace("/", ""))
+        positions = mt5.positions_get(symbol=sym)
+    else:
+        positions = mt5.positions_get()
+
+    if positions is None:
+        return []
+
+    result = []
+    for p in positions:
+        result.append({
+            "ticket":     p.ticket,
+            "symbol":     p.symbol,
+            "direction":  "buy" if p.type == mt5.ORDER_TYPE_BUY else "sell",
+            "volume":     p.volume,
+            "price_open": p.price_open,
+            "profit":     p.profit,
+            "sl":         p.sl,
+            "tp":         p.tp,
+            "magic":      p.magic,
+        })
+    return result
+
+
 def get_account_balance():
     """Tagasta konto saldo."""
     if not is_connected():
@@ -310,3 +350,38 @@ def get_account_equity():
     if info is None:
         return None
     return info.equity
+
+
+def get_closed_deal_pnl(ticket):
+    """
+    Too suletud positsiooni PÄRIS tulemus MT5 tehinguajaloost.
+
+    `ticket` on positsiooni ID (position_id) — sama väärtus, mis
+    get_open_positions()["ticket"] ja place_order()'i tagastatud orderId.
+    Üks positsioon võib sulguda mitme deal'iga (osaline sulgemine, TP/SL
+    korraga tabamine) — summeeri kõik selle position_id'ga deal'id.
+
+    Tagastab dict {"pnl", "close_price", "close_time"} või None, kui
+    ajalugu ei leitud (nt terminal alles käivitatud, ajalugu pole veel
+    laetud, või vale ticket).
+    """
+    if not is_connected():
+        return None
+    try:
+        deals = mt5.history_deals_get(position=int(ticket))
+    except Exception as e:
+        logger.error(f"get_closed_deal_pnl({ticket}): {e}")
+        return None
+    if not deals:
+        return None
+
+    pnl = sum(d.profit + d.commission + d.swap for d in deals)
+    # Sulgemis-deal on DEAL_ENTRY_OUT (vastand positsiooni avanud DEAL_ENTRY_IN
+    # deal'ile); kui mitu (osaline sulgemine), võtame viimase kui sulgemishetke.
+    closing = [d for d in deals if d.entry == mt5.DEAL_ENTRY_OUT]
+    last = closing[-1] if closing else deals[-1]
+    return {
+        "pnl":         round(float(pnl), 2),
+        "close_price": last.price,
+        "close_time":  datetime.fromtimestamp(last.time, tz=timezone.utc).isoformat(),
+    }
