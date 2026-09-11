@@ -275,8 +275,29 @@ const DEF={n:'',t:'f',tf:'1d',s:'—'}
 // f = forex 5 kohta, j = JPY-paar 3 kohta, g/i = kuld/indeks 2 kohta
 const dec=t=>t==='f'?5:t==='j'?3:2
 
-let lastScan=Date.now(),SCAN_MS=900000
-function tick(){const r=Math.max(0,SCAN_MS-(Date.now()-lastScan));const m=Math.floor(r/60000),s=Math.floor((r%60000)/1000);document.getElementById('sv').textContent=m+'m '+String(s).padStart(2,'0')+'s';document.getElementById('sf').style.width=(r/SCAN_MS*100)+'%'}
+// Bot skannib iga SCAN_INTERVAL=60s (main_v4.py r26). Varem oli siin
+// 900000 (15 min) — taimer luges maha taiesti valest numbrist.
+let lastScan=Date.now(),SCAN_MS=60000,dataAge=0,botAlive=true
+// Postgres annab "2026-09-11 15:00:42.345623+00" — Safari/Firefox ei pruugi
+// tuhikuga varianti parsida, seega normaliseeri ISO kujule.
+function tsParse(v){
+  if(!v)return null
+  const d=new Date(String(v).replace(' ','T').replace(/\+00$/,'Z'))
+  return isNaN(d)?null:d
+}
+function tick(){
+  const age=Date.now()-lastScan
+  if(!botAlive){
+    const mins=Math.floor(age/60000)
+    document.getElementById('sv').textContent=mins>=60?Math.floor(mins/60)+'h '+(mins%60)+'m vana':mins+'m vana'
+    document.getElementById('sf').style.width='100%'
+    document.getElementById('sf').style.background='var(--red)'
+    return
+  }
+  const r=Math.max(0,SCAN_MS-age),m=Math.floor(r/60000),s=Math.floor((r%60000)/1000)
+  document.getElementById('sv').textContent=m+'m '+String(s).padStart(2,'0')+'s'
+  document.getElementById('sf').style.width=(r/SCAN_MS*100)+'%'
+}
 setInterval(tick,1000)
 
 async function api(p){const r=await fetch(`${SB}/rest/v1/${p}`,{headers:{'apikey':KEY,'Authorization':'Bearer '+KEY}});if(!r.ok)throw r.status;return r.json()}
@@ -286,12 +307,18 @@ async function load(){
   try{
     const[sa,pos]=await Promise.all([api('bot_state?id=eq.1&select=*'),api('signals?executed=eq.false&order=created_at.desc&limit=30')])
     const s=sa[0]||{},st=s.stats||{},logs=s.log||[],bal=+(st.balance||s.balance||0)
+    // Elususe otsus KOHE alguses — botAlive't kasutatakse juba floating'u
+    // margistamisel allpool, seega ta peab enne seda arvutatud olema.
+    const upd=tsParse(s.updated_at)
+    lastScan=upd?upd.getTime():Date.now()
+    dataAge=Date.now()-lastScan
+    botAlive=upd?(dataAge<3*SCAN_MS):true
     document.getElementById('bal').textContent=bal?bal.toFixed(2)+'€':'—'
     document.getElementById('ls').textContent=s.last_scan||'—'
     const eq=st.equity!=null?+st.equity:bal
     document.getElementById('eq').textContent=eq?eq.toFixed(2)+'€':'—'
     const eqDiff=eq-bal,eqdEl=document.getElementById('eqd')
-    if(Math.abs(eqDiff)>0.01){eqdEl.textContent=(eqDiff>=0?'+':'')+eqDiff.toFixed(2)+'€ floating';eqdEl.style.color=eqDiff>=0?'var(--green)':'var(--red)'}
+    if(Math.abs(eqDiff)>0.01){eqdEl.textContent=(eqDiff>=0?'+':'')+eqDiff.toFixed(2)+'€ floating'+(botAlive?'':' (VANA)');eqdEl.style.color=eqDiff>=0?'var(--green)':'var(--red)'}
     else{eqdEl.textContent='floating P&L';eqdEl.style.color='var(--text3)'}
     const g=bal?((bal-S0)/S0*100):0
     const gt=document.getElementById('growthTag')
@@ -320,8 +347,18 @@ async function load(){
     const biasEt=bias==='buy'?'Ostuseis':bias==='sell'?'Müügiseis':'Neutraalne'
     document.getElementById('ab').textContent='Turu lugemine · '+biasEt
     document.getElementById('ar').textContent=st.claude_reason||'Turuanalüüs käib...'
-    document.getElementById('st').textContent='SÜSTEEM AKTIIVNE'
-    lastScan=Date.now()
+    // VARASEM VIGA: need kaks rida jooksid iga onnestunud parimise peale,
+    // ka siis kui bot oli surnud ja bot_state rida oli tunde vana. Dashboard
+    // kuulutas "SUSTEEM AKTIIVNE" ja nullis taimeri, nii et kulmutatud
+    // hetktommis (nt vana floating P&L) nagi valja nagu praegune seis.
+    // Nuud otsustab elususe bot_state.updated_at, mitte parimise onnestumine.
+    const stEl=document.getElementById('st')
+    if(botAlive){stEl.textContent='SÜSTEEM AKTIIVNE';stEl.style.color=''}
+    else{
+      const mins=Math.floor(dataAge/60000)
+      stEl.textContent='⚠️ BOT VAIKIB — andmed '+(mins>=60?Math.floor(mins/60)+'h':mins+'min')+' vanad'
+      stEl.style.color='var(--red)'
+    }
 
     document.getElementById('ig').innerHTML=active.map(sym=>{
       const info=I[sym]||{...DEF,n:sym}
