@@ -13,7 +13,7 @@ INSTRUMENTS = {
         "pip_value":    100,
         "symbol_td":    "XAU/USD",
         "interval":     "1h",
-        "enabled":      True,
+        "enabled":      False,
     },
     "AUDCAD": {
         "strategy":     "meanrev",
@@ -287,7 +287,7 @@ GRID_CONFIG = {
     # mis annab portfellile drawdown -36.6% vs -63.0% sama kapitali puhul
     # ainult kullas. Kasumlik KÕIGIL 7 testitud aastal (ainus konfiguratsioon,
     # mis seda saavutas).
-    "portfolio_enabled": False,
+    "portfolio_enabled": True,
     "portfolio_risk_pct": 0.015,
     "portfolio_interval": "1d",     # testitud päevabaaridel — ära muuda ilma uue backtestita
     "portfolio_legs": [
