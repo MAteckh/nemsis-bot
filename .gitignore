@@ -3,4 +3,8 @@ __pycache__/
 
 # Ajaloolised hinnaandmed backtest.py jaoks — reaalsed broker/andmeteenuse
 # eksportid, ei kuulu koodi versioonihaldusesse (suured, muutuvad, isiklikud).
-bot/data/
+bot/data/*
+
+# erand: lühiajaliste intressimäärade ajalugu on avalik viiteandmestik
+# (T-bill), vajalik research.py finantseerimismudeli reprodutseerimiseks
+!bot/data/RATES_m.csv
