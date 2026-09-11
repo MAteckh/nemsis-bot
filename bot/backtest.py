@@ -104,9 +104,9 @@ def make_synthetic_ohlc(n=8000, seed=42, start_price=2000.0):
 # ─────────────────────────────────────────────────────────
 
 class Trade:
-    __slots__ = ("direction", "entry", "tp", "sl", "lot", "opened_at", "closed_at", "pnl", "reason")
+    __slots__ = ("direction", "entry", "tp", "sl", "lot", "opened_at", "closed_at", "pnl", "reason", "engine")
 
-    def __init__(self, direction, entry, tp, sl, lot, opened_at):
+    def __init__(self, direction, entry, tp, sl, lot, opened_at, engine="grid"):
         self.direction = direction
         self.entry = entry
         self.tp = tp
@@ -116,6 +116,7 @@ class Trade:
         self.closed_at = None
         self.pnl = None
         self.reason = None
+        self.engine = engine
 
 
 def simulate_gold_grid(df, grid_cfg=None, instrument_cfg=None, account_balance=200.0,
@@ -219,8 +220,14 @@ def simulate_gold_grid(df, grid_cfg=None, instrument_cfg=None, account_balance=2
         lot = gold_logic.get_compound_lot(balance, account_balance, atr_history, grid_cfg)
         adx_ok = True
         entry_adx_ok = True
-        if (grid_cfg.get("adx_filter", False) or grid_cfg.get("adx_max_filter", False)) and len(window) >= 28:
+        adx_val_cur = None
+        if (grid_cfg.get("adx_filter", False) or grid_cfg.get("adx_max_filter", False)
+                or grid_cfg.get("dual_engine", False)) and len(window) >= 28:
             adx_val_cur = gold_logic.calc_adx(window["high"], window["low"], window["close"])
+            if grid_cfg.get("dual_engine", False):
+                # KAHE MOOTORI LÜLITI: grid (fade) ainult rahulikus turus,
+                # tugeva trendi ajal lülitub sisse breakout-mootor allpool.
+                entry_adx_ok = adx_val_cur <= grid_cfg.get("adx_switch", 40.0)
             if grid_cfg.get("adx_filter", False):
                 adx_ok = adx_val_cur >= grid_cfg.get("adx_min", 20.0)
             if grid_cfg.get("adx_max_filter", False):
@@ -233,6 +240,8 @@ def simulate_gold_grid(df, grid_cfg=None, instrument_cfg=None, account_balance=2
         # ── TP/SL kontroll olemasolevatel positsioonidel ──
         still_open = []
         for pos in open_positions:
+            if pos.engine == "breakout" and grid_cfg.get("bo_use_trailing", False):
+                pos.sl = gold_logic.update_trailing_sl(pos.direction, pos.entry, price, pos.sl, atr_val, grid_cfg)
             tp_hit = (high >= pos.tp) if pos.direction == "buy" else (low <= pos.tp)
             sl_hit = (low <= pos.sl) if pos.direction == "buy" else (high >= pos.sl)
             if tp_hit and sl_hit:
@@ -350,6 +359,35 @@ def simulate_gold_grid(df, grid_cfg=None, instrument_cfg=None, account_balance=2
                     open_positions.append(Trade(direction, price, tp, sl, order_lot, now))
                     last_order_bar = i
                     del pending[level_str]
+
+        # ── BREAKOUT-MOOTOR ──────────────────────────────────
+        # Aktiveerub TÄPSELT siis, kui grid on ADX-lüliti tõttu blokeeritud
+        # (tugev trend) — s.t. need on need nädalad, kus fade-mootor ajalooliselt
+        # kaotas. Donchian-tüüpi väljamurre: sulgumine üle viimase N baari
+        # tipu (ost) või alla põhja (müük), ATR-põhine SL ja laiem TP.
+        if grid_cfg.get("dual_engine", False) and not entry_adx_ok and not news_blackout and not risk_halt:
+            bo_lb = grid_cfg.get("bo_lookback", 20)
+            if len(window) > bo_lb and len(open_positions) < max_positions and i - last_order_bar >= cooldown_bars:
+                prior = window.iloc[-(bo_lb + 1):-1]
+                prior_high, prior_low = float(prior["high"].max()), float(prior["low"].min())
+                bo_dir = None
+                if price > prior_high:
+                    bo_dir = "buy"
+                elif price < prior_low:
+                    bo_dir = "sell"
+                if bo_dir and not (open_positions and open_positions[0].direction != bo_dir):
+                    sl_dist = grid_cfg.get("bo_sl_atr", 1.5) * atr_val
+                    tp_dist = grid_cfg.get("bo_tp_atr", 3.0) * atr_val
+                    if bo_dir == "buy":
+                        bo_sl, bo_tp = round(price - sl_dist, 2), round(price + tp_dist, 2)
+                    else:
+                        bo_sl, bo_tp = round(price + sl_dist, 2), round(price - tp_dist, 2)
+                    bo_lot = gold_logic.get_risk_based_lot(
+                        balance, sl_dist, pip_value,
+                        grid_cfg.get("risk_pct", 0.015), max_lot=grid_cfg.get("risk_lot_max", 0.5)) \
+                        if grid_cfg.get("risk_based_lot") else lot
+                    open_positions.append(Trade(bo_dir, price, bo_tp, bo_sl, bo_lot, now, engine="breakout"))
+                    last_order_bar = i
 
         floating = sum(
             (price - p.entry) * p.lot * pip_value if p.direction == "buy" else (p.entry - price) * p.lot * pip_value
