@@ -218,8 +218,17 @@ def simulate_gold_grid(df, grid_cfg=None, instrument_cfg=None, account_balance=2
         effective_gs = gold_logic.get_dynamic_grid_size(atr_val, grid_cfg) if grid_cfg.get("dynamic_grid_size") else gs_static
         lot = gold_logic.get_compound_lot(balance, account_balance, atr_history, grid_cfg)
         adx_ok = True
-        if grid_cfg.get("adx_filter", False) and len(window) >= 28:
-            adx_ok = gold_logic.calc_adx(window["high"], window["low"], window["close"]) >= grid_cfg.get("adx_min", 20.0)
+        entry_adx_ok = True
+        if (grid_cfg.get("adx_filter", False) or grid_cfg.get("adx_max_filter", False)) and len(window) >= 28:
+            adx_val_cur = gold_logic.calc_adx(window["high"], window["low"], window["close"])
+            if grid_cfg.get("adx_filter", False):
+                adx_ok = adx_val_cur >= grid_cfg.get("adx_min", 20.0)
+            if grid_cfg.get("adx_max_filter", False):
+                # Nädalate analüüs (2a H1) näitas: grid on FADE-mehhanism (kitsas
+                # $30 TP) — see teenib rahulikus/külgsuunalises turus ja kaotab
+                # just tugeva trendiga nädalatel. Seega blokeeri SISENEMINE,
+                # kui trend on liiga tugev, mitte liiga nõrk.
+                entry_adx_ok = adx_val_cur <= grid_cfg.get("adx_max", 45.0)
 
         # ── TP/SL kontroll olemasolevatel positsioonidel ──
         still_open = []
@@ -307,7 +316,7 @@ def simulate_gold_grid(df, grid_cfg=None, instrument_cfg=None, account_balance=2
                 grid_state = None
         else:
             # ── pending taseme päästikud ──
-            if not news_blackout and not risk_halt and effective_trend != "neutral":
+            if not news_blackout and not risk_halt and entry_adx_ok and effective_trend != "neutral":
                 pending = grid_state["pending"]
                 for level_str in list(pending.keys()):
                     direction = pending[level_str]
