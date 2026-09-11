@@ -700,6 +700,141 @@ def run_gold_core_overlay(price, high, low, now, df):
         send_telegram(f"🚨 <b>KRIITILINE</b>\nÜlekiht {res.get('orderId')} täitus MT5-l, aga andmebaasi ei jõudnud. Kontrolli käsitsi!")
 
 
+# ─────────────────────────────────────────────────────────
+#  HAJUTATUD PORTFELL
+# ─────────────────────────────────────────────────────────
+
+_symbol_cache = {}
+
+
+def resolve_broker_symbol(candidates):
+    """
+    Leia, millise nime all broker instrumenti pakub. Eri brokerid kutsuvad
+    indekseid erinevalt (US500 / SPX500 / USA500 ...), seega proovime
+    kandidaadid läbi ja jätame meelde esimese, mis andmeid tagastab.
+    Tagastab None, kui ükski ei tööta.
+    """
+    key = tuple(candidates)
+    if key in _symbol_cache:
+        return _symbol_cache[key]
+    for cand in candidates:
+        try:
+            df = ct.get_candles(cand, interval="1d", count=5)
+            if df is not None and not df.empty:
+                _symbol_cache[key] = cand
+                add_log(f"🔎 Sümbol lahendatud: {cand}")
+                return cand
+        except Exception:
+            continue
+    _symbol_cache[key] = None
+    add_log(f"⚠️ Ühtegi sümbolit ei leitud: {candidates} — see jalg jäetakse vahele")
+    return None
+
+
+def _portfolio_signal_fn(kind):
+    import strategies as S
+    return {
+        "donchian":       S.sig_donchian,
+        "donchian_trend": S.sig_donchian_trendfiltered,
+        "bollinger_fade": S.sig_bollinger_reversion,
+        "ts_momentum":    S.sig_ts_momentum,
+        "ema_cross":      S.sig_ema_cross,
+    }.get(kind)
+
+
+def run_portfolio_leg(leg, now):
+    """Üks portfelli jalg: sulge tabatud positsioonid, ava uus signaali korral."""
+    name = leg["name"]
+    pv = float(leg.get("pip_value", 100.0))
+    sym = resolve_broker_symbol(leg["symbol_candidates"])
+    if sym is None:
+        return
+
+    interval = GRID_CONFIG.get("portfolio_interval", "1d")
+    df = get_data(sym, interval=interval, outputsize=300)
+    if df is None or len(df) < 60:
+        add_log(f"⚠️ {name}: andmeid liiga vähe")
+        return
+    price = get_price(sym)
+    if price <= 0:
+        price = float(df["close"].iloc[-1])
+    high = float(df["high"].iloc[-1])
+    low = float(df["low"].iloc[-1])
+
+    session = f"pf_{name}"
+    open_pos = sb_select("signals", f"executed=eq.false&session=eq.{session}&order=created_at.asc")
+
+    # ── sulgemised ──
+    for pos in open_pos:
+        entry, d = float(pos.get("entry", 0)), pos.get("direction", "buy")
+        tp, sl = pos.get("tp"), pos.get("sl")
+        hit = None
+        if tp is not None and ((high >= float(tp)) if d == "buy" else (low <= float(tp))):
+            hit = ("TP", float(tp))
+        elif sl is not None and ((low <= float(sl)) if d == "buy" else (high >= float(sl))):
+            hit = ("SL", float(sl))
+        if not hit:
+            continue
+        label, level = hit
+        lot = float(pos.get("lot") or 0.01)
+        pnl = (level - entry) * lot * pv if d == "buy" else (entry - level) * lot * pv
+        sb_upsert("signals", {"id": pos["id"], "executed": True})
+        add_log(f"{'✅' if pnl > 0 else '🛑'} {name} {label}: {d.upper()} {entry:.4f}→{level:.4f}  {pnl:+.2f}€")
+        send_telegram(f"{'✅' if pnl > 0 else '🛑'} <b>{name} {label}</b>\n{d.upper()} {entry:.4f}→{level:.4f}\n{pnl:+.2f}€")
+
+    # ── uus signaal ──
+    if now.weekday() >= 5 or gold_logic.is_news_blackout(now):
+        return
+    if [p for p in open_pos if not p.get("executed")]:
+        return  # üks positsioon korraga jala kohta
+    # Backtestis sai iga baar anda MAX ÜHE sisenemise. Live skaneerib aga iga
+    # minut, nii et sama päevabaari signaal käivituks ikka ja jälle (ka kohe
+    # pärast TP/SL sulgemist). Seepärast: üks sisenemine päevas jala kohta.
+    today_iso = now.strftime("%Y-%m-%d")
+    if sb_select("signals", f"session=eq.{session}&created_at=gte.{today_iso}&limit=1"):
+        return
+    fn = _portfolio_signal_fn(leg.get("signal"))
+    if fn is None:
+        add_log(f"⚠️ {name}: tundmatu signaal {leg.get('signal')}")
+        return
+    sig = fn(df, dict(leg.get("params", {})))
+    if sig is None:
+        return
+    direction, sl_dist, tp_dist = sig
+    if sl_dist <= 0:
+        return
+
+    balance = get_balance()
+    lot = gold_logic.get_risk_based_lot(balance, sl_dist, pv,
+                                        GRID_CONFIG.get("portfolio_risk_pct", 0.015),
+                                        max_lot=GRID_CONFIG.get("risk_lot_max", 0.5))
+    tp = round(price + tp_dist if direction == "buy" else price - tp_dist, 5)
+    sl = round(price - sl_dist if direction == "buy" else price + sl_dist, 5)
+    res = ct.place_order(direction, sym, lot, tp=tp, sl=sl)
+    if "error" in res:
+        add_log(f"❌ {name} order ebaõnnestus: {res['error']}")
+        return
+    ok = sb_insert("signals", {
+        "direction": direction, "entry": round(price, 5), "tp": tp, "sl": sl,
+        "lot": lot, "regime": "portfolio", "session": session,
+        "executed": False, "breakeven": False, "atr": 0, "score": 0,
+        "mt5_ticket": res.get("orderId"),
+    })
+    add_log(f"📊 {name} {direction.upper()} @ {price:.4f} lot={lot} TP:{tp} SL:{sl}")
+    send_telegram(f"📊 <b>{name} {direction.upper()}</b>\n@ {price:.4f} lot={lot}\nTP {tp} | SL {sl}")
+    if not ok:
+        logger.error(f"🚨 KRIITILINE: {name} order {res.get('orderId')} täitus, Supabase salvestus ebaõnnestus — JÄLGIMATA!")
+        send_telegram(f"🚨 <b>KRIITILINE</b>\n{name} {res.get('orderId')} täitus MT5-l, aga andmebaasi ei jõudnud. Kontrolli käsitsi!")
+
+
+def run_portfolio(now):
+    for leg in GRID_CONFIG.get("portfolio_legs", []):
+        try:
+            run_portfolio_leg(leg, now)
+        except Exception as e:
+            add_log(f"❌ Portfell {leg.get('name')}: {e}")
+
+
 def run_gold_grid(price, high, low, now):
     # ── NÄDALAVAHETUS — reede 21:00 UTC sulge kõik, lau/püha ei kauple üldse ──
     # (sama muster mis strategy_meanrev.py-s forexile juba olemas —
@@ -1157,6 +1292,13 @@ def main():
                         add_log("⚠️ Gold: hind puudub cTrader-ist")
                 except Exception as e:
                     add_log(f"❌ Gold error: {e}")
+
+            # ── HAJUTATUD PORTFELL ──
+            if GRID_CONFIG.get("portfolio_enabled", False):
+                try:
+                    run_portfolio(now)
+                except Exception as e:
+                    add_log(f"❌ Portfelli viga: {e}")
 
             # ── FOREX MEAN REVERSION ──
             for symbol, strategy in mr_strategies.items():

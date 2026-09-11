@@ -274,6 +274,33 @@ GRID_CONFIG = {
     "bo_tp_atr":      3.0,
     "overlay_max_pos": 1,
 
+    # ── HAJUTATUD PORTFELL (11 Sept 2026) ───────────────────
+    # Lülita sisse: portfolio_enabled = True. Töötab gold-režiimist SÕLTUMATULT
+    # (võid jätta kulla grid'i käima või panna selle enabled=False).
+    #
+    # Miks need paarid: 42 instrument x strateegia kombinatsiooni testist
+    # (2020-2026 päevaandmed, kulud sees) jäid alles need, mis olid kasumlikud
+    # >=70% aastatest. Strateegia sobivus on INSTRUMENDIPÕHINE — mean reversion
+    # on kullal selgelt kahjumlik (-1389), aga S&P 500-l parim (+1293).
+    #
+    # Jalgade omavaheline korrelatsioon on praktiliselt null (-0.02..+0.16),
+    # mis annab portfellile drawdown -36.6% vs -63.0% sama kapitali puhul
+    # ainult kullas. Kasumlik KÕIGIL 7 testitud aastal (ainus konfiguratsioon,
+    # mis seda saavutas).
+    "portfolio_enabled": False,
+    "portfolio_risk_pct": 0.015,
+    "portfolio_interval": "1d",     # testitud päevabaaridel — ära muuda ilma uue backtestita
+    "portfolio_legs": [
+        {"name": "XAUUSD", "symbol_candidates": ["XAUUSD"],
+         "signal": "donchian", "params": {"lookback": 50}, "pip_value": 100.0},
+        {"name": "SPX", "symbol_candidates": ["US500", "SPX500", "USA500", "US500.cash", "SP500"],
+         "signal": "bollinger_fade", "params": {}, "pip_value": 100.0},
+        {"name": "USDJPY", "symbol_candidates": ["USDJPY"],
+         "signal": "donchian_trend", "params": {"lookback": 20, "ema_trend": 200}, "pip_value": 1000.0},
+        {"name": "EURUSD", "symbol_candidates": ["EURUSD"],
+         "signal": "ts_momentum", "params": {"mom_lookback": 60}, "pip_value": 100000.0},
+    ],
+
     # ── Scalp-kihi parameetrid (10 Sept 2026) ───────────────
     # Toodud config'i, et neid saaks backtest.py's testida ilma koodi
     # muutmata (varem olid need hard-coded main_v4.py sees).
