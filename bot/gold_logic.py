@@ -171,6 +171,109 @@ def setup_grid(center, trend, grid_size, levels):
     return p
 
 
+def calc_rsi(closes, period=14):
+    """RSI — sama valem, mis strategy_meanrev.py's, siia toodud jagamiseks."""
+    if len(closes) < period + 1:
+        return 50.0
+    deltas = np.diff(closes[-(period + 1):])
+    gains = deltas[deltas > 0].sum() / period
+    losses = -deltas[deltas < 0].sum() / period
+    if losses == 0:
+        return 100.0
+    return 100 - (100 / (1 + gains / losses))
+
+
+def detect_regime(adx_val, adx_trend_min=25.0, adx_range_max=18.0):
+    """
+    Turu-reziim ADX järgi: 'trend' (piisavalt tugev suund grid/trendi
+    strateegiaks), 'range' (nõrk trend, mean-reversion sobib paremini) või
+    'transition' (kahe vahel — kumbki strateegia pole usaldusväärne, ei
+    kaubelda üldse). See on otseselt kasutaja idee: eri strateegia eri
+    turuseisundile, mitte üks strateegia kõigeks.
+    """
+    if adx_val >= adx_trend_min:
+        return "trend"
+    if adx_val <= adx_range_max:
+        return "range"
+    return "transition"
+
+
+def is_bullish_engulfing(df):
+    """Viimane küünal 'neelab' eelmise punase küünla täielikult — ostu-kinnitus."""
+    if df is None or len(df) < 2:
+        return False
+    prev, cur = df.iloc[-2], df.iloc[-1]
+    return (prev["close"] < prev["open"] and cur["close"] > cur["open"]
+            and cur["close"] >= prev["open"] and cur["open"] <= prev["close"])
+
+
+def is_bearish_engulfing(df):
+    """Viimane küünal 'neelab' eelmise rohelise küünla täielikult — müügi-kinnitus."""
+    if df is None or len(df) < 2:
+        return False
+    prev, cur = df.iloc[-2], df.iloc[-1]
+    return (prev["close"] > prev["open"] and cur["close"] < cur["open"]
+            and cur["open"] >= prev["close"] and cur["close"] <= prev["open"])
+
+
+def is_pin_bar(df, direction):
+    """
+    Pin bar / hammer: pikk varjund (>=2x keha) vastassuunas, väike keha —
+    hinna tagasilükkamine antud tasemelt. direction='buy' otsib alumist
+    varjundit (ostu-kinnitus toe juures), 'sell' ülemist (müügi-kinnitus
+    vastupanu juures).
+    """
+    if df is None or len(df) < 1:
+        return False
+    c = df.iloc[-1]
+    o, h, l, cl = float(c["open"]), float(c["high"]), float(c["low"]), float(c["close"])
+    body = abs(cl - o)
+    full_range = h - l
+    if full_range <= 0:
+        return False
+    if direction == "buy":
+        lower_wick = min(o, cl) - l
+        return lower_wick >= 2 * body and lower_wick / full_range > 0.5
+    else:
+        upper_wick = h - max(o, cl)
+        return upper_wick >= 2 * body and upper_wick / full_range > 0.5
+
+
+def candlestick_confirms(df, direction):
+    """Ükskõik milline toetav mudel (engulfing VÕI pin bar) antud suunas."""
+    if direction == "buy":
+        return is_bullish_engulfing(df) or is_pin_bar(df, "buy")
+    return is_bearish_engulfing(df) or is_pin_bar(df, "sell")
+
+
+def update_trailing_sl(direction, entry, current_price, current_sl, atr, cfg):
+    """
+    Trailing SL fikseeritud TP asemel — lase kasumlikul trendil joosta,
+    mitte ei sulge kunstlikult $30 juures. Kaks etappi:
+      1) Kui kasum >= `trail_activate_atr` × ATR, tõsta SL breakeven'ile
+         (+ väike puhver), et tehing ei saaks enam kaotuseks minna.
+      2) Kui kasum ületab selle veel `trail_step_atr` × ATR võrra, lohista
+         SL järele `trail_distance_atr` × ATR kaugusele hetkehinnast.
+    SL liigub AINULT kasumi suunas, mitte kunagi tagasi.
+    """
+    activate = cfg.get("trail_activate_atr", 1.0) * atr
+    distance = cfg.get("trail_distance_atr", 1.5) * atr
+    buf = cfg.get("trail_breakeven_buf", 2.0)
+
+    if direction == "buy":
+        profit = current_price - entry
+        if profit < activate:
+            return current_sl
+        new_sl = max(entry + buf, current_price - distance)
+        return max(current_sl, round(new_sl, 2))
+    else:
+        profit = entry - current_price
+        if profit < activate:
+            return current_sl
+        new_sl = min(entry - buf, current_price + distance)
+        return min(current_sl, round(new_sl, 2))
+
+
 def is_news_blackout(now):
     """
     Uudiste-aken, mil uusi positsioone EI avata (olemasolevaid hallatakse

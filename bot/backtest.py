@@ -486,6 +486,207 @@ def simulate_scalp_layer(df5, grid_cfg=None, instrument_cfg=None, account_balanc
 
 
 # ─────────────────────────────────────────────────────────
+#  MITME-REZIIMI PROTOTÜÜP — trend vs range, candlestick, S/R,
+#  trailing SL, uudiste-järgne kinnitus. Puhas UURIMISTÖÖ — seda ei
+#  ole main_v4.py-sse ühendatud, ainult testitud siin päris andmete peal.
+# ─────────────────────────────────────────────────────────
+
+DEFAULT_REGIME_CFG = {
+    "trend_period": 10, "trend_thresh": 0.3,
+    "adx_trend_min": 25.0, "adx_range_max": 18.0,
+    "rsi_period": 14, "rsi_ob": 70, "rsi_os": 30,
+    "sr_lookback": 20, "sr_zone_atr": 0.5,   # "lähedal S/R-le" = ATR × see kordaja
+    "pullback_lookback": 5,                  # lühem aken trendi-tagasitõmbe tuvastamiseks (mitte struktuurne S/R)
+    "require_candlestick": True,
+    "use_trailing_sl": True,
+    "trail_activate_atr": 1.0, "trail_distance_atr": 1.5, "trail_breakeven_buf": 2.0,
+    "fixed_tp_atr_mult": 2.0,                 # kui trailing väljas
+    "range_tp_atr_mult": 1.5,                 # range-tehingu TP (vastasserva suunas)
+    "sl_atr_mult": 1.5,
+    "news_confirm_bars": 2,                   # mitu järjestikust sama-suunalist baari uudiste JÄREL enne uut trade'i
+    "news_filter": True,
+    "max_positions": 2,
+    "risk_pct": 0.015,
+    "risk_lot_max": 0.5,
+}
+
+
+def simulate_regime_strategy(df, cfg=None, account_balance=200.0, pip_value=100.0):
+    """
+    Reziim ADX järgi ('trend' vs 'range' vs 'transition' — ei kaubelda):
+      - TREND: kauple `get_trend()` suunas, AGA ainult kui hind on
+        tagasitõmbel lähedal viimase `sr_lookback` swing-tasemele (mitte
+        kohe iga trendi peale) JA candlestick kinnitab pöörde — täpselt
+        kasutaja idee: "vaata kuhu trend, oota kinnitust, tradi kaasa".
+        TP asemel (vaikimisi) trailing SL — lase kasumil joosta.
+      - RANGE: RSI mean-reversion tugi/vastupanu vahel — osta toe juures
+        kui RSI ülemüüdud + candlestick kinnitab, target vastasserv.
+      - TRANSITION: ei kaubelda üldse (kumbki loogika pole usaldusväärne).
+      - Uudised: blackout ajal ei avata; blackout LÕPUS nõuab
+        `news_confirm_bars` järjestikust sama-suunalist baari, enne kui
+        uuesti tradib (mitte kohe esimesel baaril pärast akent).
+    """
+    cfg = {**DEFAULT_REGIME_CFG, **(cfg or {})}
+    trend_period, trend_thresh = cfg["trend_period"], cfg["trend_thresh"]
+
+    balance = account_balance
+    open_positions = []
+    closed_trades = []
+    equity_points = []
+    atr_history = []
+
+    day_key = week_key = None
+    day_start_balance = week_start_balance = balance
+    paused_day = paused_week = False
+
+    was_blackout = False
+    news_confirm_left = 0
+    news_direction = None
+
+    min_history = 60
+    for i in range(min_history, len(df)):
+        window = df.iloc[max(0, i - 249): i + 1]
+        bar = df.iloc[i]
+        now = df.index[i]
+        price, high, low = float(bar["close"]), float(bar["high"]), float(bar["low"])
+
+        if now.weekday() == 4 and now.hour >= 21:
+            for pos in open_positions:
+                pnl = (price - pos.entry) * pos.lot * pip_value if pos.direction == "buy" \
+                    else (pos.entry - price) * pos.lot * pip_value
+                pos.closed_at, pos.pnl, pos.reason = now, pnl, "weekend"
+                balance += pnl
+                closed_trades.append(pos)
+            open_positions = []
+            equity_points.append((now, balance))
+            continue
+        if now.weekday() in (5, 6):
+            equity_points.append((now, balance))
+            continue
+
+        cur_day, cur_week = now.strftime("%Y-%m-%d"), now.strftime("%Y-W%W")
+        if cur_week != week_key:
+            week_key, week_start_balance, paused_week = cur_week, balance, False
+        if cur_day != day_key:
+            day_key, day_start_balance, paused_day = cur_day, balance, False
+
+        atr_val = gold_logic.calc_atr(window, period=14)
+        atr_history.append(atr_val)
+        adx_val = gold_logic.calc_adx(window["high"], window["low"], window["close"])
+        regime = gold_logic.detect_regime(adx_val, cfg["adx_trend_min"], cfg["adx_range_max"])
+        trend = gold_logic.get_trend(window, trend_period, trend_thresh)
+        rsi = gold_logic.calc_rsi(window["close"].values, cfg["rsi_period"])
+        swing_low, swing_high = gold_logic.get_swing_levels(window, lookback=cfg["sr_lookback"])
+        news_blackout = cfg.get("news_filter", True) and gold_logic.is_news_blackout(now)
+
+        # ── uudiste-järgne kinnituse ootamine ──
+        if was_blackout and not news_blackout:
+            news_confirm_left = cfg["news_confirm_bars"]
+            news_direction = None
+        was_blackout = news_blackout
+        news_wait = False
+        if news_confirm_left > 0 and not news_blackout:
+            d = "up" if price > float(df.iloc[i - 1]["close"]) else "down"
+            if news_direction is None or news_direction == d:
+                news_direction = d
+                news_confirm_left -= 1
+            else:
+                news_confirm_left = cfg["news_confirm_bars"]  # katkes, alusta otsast
+                news_direction = d
+            news_wait = news_confirm_left > 0
+
+        # ── TP/SL + trailing kontroll olemasolevatel positsioonidel ──
+        still_open = []
+        for pos in open_positions:
+            if cfg.get("use_trailing_sl") and pos.reason != "range":
+                pos.sl = gold_logic.update_trailing_sl(pos.direction, pos.entry, price, pos.sl, atr_val, cfg)
+            tp_hit = (high >= pos.tp) if pos.direction == "buy" else (low <= pos.tp)
+            sl_hit = (low <= pos.sl) if pos.direction == "buy" else (high >= pos.sl)
+            if tp_hit and sl_hit:
+                pnl = (pos.sl - pos.entry) * pos.lot * pip_value if pos.direction == "buy" \
+                    else (pos.entry - pos.sl) * pos.lot * pip_value
+                pos.closed_at, pos.pnl = now, pnl
+                pos.reason = pos.reason + "_sl(ambiguous)"
+                balance += pnl; closed_trades.append(pos)
+            elif tp_hit:
+                pnl = (pos.tp - pos.entry) * pos.lot * pip_value if pos.direction == "buy" \
+                    else (pos.entry - pos.tp) * pos.lot * pip_value
+                pos.closed_at, pos.pnl = now, pnl
+                pos.reason = pos.reason + "_tp"
+                balance += pnl; closed_trades.append(pos)
+            elif sl_hit:
+                pnl = (pos.sl - pos.entry) * pos.lot * pip_value if pos.direction == "buy" \
+                    else (pos.entry - pos.sl) * pos.lot * pip_value
+                pos.closed_at, pos.pnl = now, pnl
+                pos.reason = pos.reason + "_sl"
+                balance += pnl; closed_trades.append(pos)
+            else:
+                still_open.append(pos)
+        open_positions = still_open
+
+        cur_equity = balance + sum(
+            (price - p.entry) * p.lot * pip_value if p.direction == "buy" else (p.entry - price) * p.lot * pip_value
+            for p in open_positions)
+        if not paused_week and week_start_balance > 0 and (week_start_balance - cur_equity) / week_start_balance > 0.15:
+            paused_week = True
+        if not paused_day and day_start_balance > 0 and (day_start_balance - cur_equity) / day_start_balance > 0.10:
+            paused_day = True
+        risk_halt = paused_day or paused_week
+
+        can_open = (not news_blackout and not news_wait and not risk_halt
+                    and len(open_positions) < cfg["max_positions"] and swing_low is not None)
+        if can_open and open_positions and open_positions[0].direction not in (None,):
+            pass  # hedge-kontroll teostatakse allpool suuna võrdlusega
+
+        if can_open:
+            sr_zone = cfg["sr_zone_atr"] * atr_val
+            direction = None
+            entry_kind = None
+
+            if regime == "trend" and trend in ("bull", "bear"):
+                # Tagasitõmbe tuvastamine kasutab LÜHEMAT akent kui struktuurne
+                # S/R (sr_lookback=20) — tugevas trendis on 20-baari swing juba
+                # kaugel maas/üleval, "lähedal toele" ei läheks kunagi tõeks.
+                pb_low, pb_high = gold_logic.get_swing_levels(window, lookback=cfg["pullback_lookback"])
+                near_support = pb_low is not None and (price - pb_low) <= sr_zone
+                near_resist = pb_high is not None and (pb_high - price) <= sr_zone
+                if trend == "bull" and near_support:
+                    direction, entry_kind = "buy", "trend"
+                elif trend == "bear" and near_resist:
+                    direction, entry_kind = "sell", "trend"
+            elif regime == "range":
+                near_support = swing_low is not None and (price - swing_low) <= sr_zone
+                near_resist = swing_high is not None and (swing_high - price) <= sr_zone
+                if rsi < cfg["rsi_os"] and near_support:
+                    direction, entry_kind = "buy", "range"
+                elif rsi > cfg["rsi_ob"] and near_resist:
+                    direction, entry_kind = "sell", "range"
+
+            if direction and (not cfg["require_candlestick"] or gold_logic.candlestick_confirms(window, direction)):
+                if not (open_positions and open_positions[0].direction != direction):
+                    sl_dist = cfg["sl_atr_mult"] * atr_val
+                    sl = round(price - sl_dist, 2) if direction == "buy" else round(price + sl_dist, 2)
+                    if entry_kind == "range":
+                        tp = round(swing_high, 2) if direction == "buy" else round(swing_low, 2)
+                    else:
+                        tp_dist = cfg["fixed_tp_atr_mult"] * atr_val
+                        tp = round(price + tp_dist, 2) if direction == "buy" else round(price - tp_dist, 2)
+                    lot = gold_logic.get_risk_based_lot(balance, abs(price - sl), pip_value,
+                                                         cfg["risk_pct"], max_lot=cfg["risk_lot_max"])
+                    pos = Trade(direction, price, tp, sl, lot, now)
+                    pos.reason = entry_kind
+                    open_positions.append(pos)
+
+        floating = sum(
+            (price - p.entry) * p.lot * pip_value if p.direction == "buy" else (p.entry - price) * p.lot * pip_value
+            for p in open_positions)
+        equity_points.append((now, balance + floating))
+
+    equity = pd.Series({t: v for t, v in equity_points}).sort_index()
+    return {"trades": closed_trades, "equity": equity, "final_balance": balance}
+
+
+# ─────────────────────────────────────────────────────────
 #  STATISTIKA
 # ─────────────────────────────────────────────────────────
 
