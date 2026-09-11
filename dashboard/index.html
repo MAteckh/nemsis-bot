@@ -206,7 +206,7 @@ footer{display:flex;justify-content:space-between;align-items:center;flex-wrap:w
     </div>
     <div class="hero-bottom">
       <div class="hero-meta" id="ls">—</div>
-      <div class="hero-meta">Algkapital 200€</div>
+      <div class="hero-meta" id="s0lbl">Algkapital —</div>
     </div>
   </div>
   <div class="b-side">
@@ -258,7 +258,7 @@ footer{display:flex;justify-content:space-between;align-items:center;flex-wrap:w
 </div>
 
 <script>
-const SB='https://xqinzjaqorjqaexeoyqc.supabase.co',KEY='sb_publishable_eGAHjERYuK9ztviFer41CQ_6FouGpQU',S0=101.31
+const SB='https://xqinzjaqorjqaexeoyqc.supabase.co',KEY='sb_publishable_eGAHjERYuK9ztviFer41CQ_6FouGpQU',S0=200
 // Instrumentide kirjeldused. t:'g' = kulla-tüüpi hinnavormindus (2 kohta),
 // t:'f' = forex (5 kohta), t:'i' = indeks (2 kohta).
 // Mida bot PÄRISELT kaupleb, tuleb stats.instruments väljalt — see nimekiri
@@ -297,7 +297,12 @@ async function load(){
     const gt=document.getElementById('growthTag')
     gt.textContent=(g>=0?'▲ +':'▼ ')+g.toFixed(1)+'%'
     gt.className='growth-tag'+(g<0?' down':'')
-    document.getElementById('gpr').textContent=st.price?'$'+parseFloat(st.price).toFixed(2):'—'
+    // stats.price taidetakse ainult vana grid-haru sees, mis on portfelli-
+    // reziimis valja lulitatud -> jai alati 0 ja dashboard naitas "—".
+    // bot_state.price (ulemine tase) uuendatakse alati, seega varuvariandiks.
+    const gp=+(st.price||s.price||0)
+    document.getElementById('s0lbl').textContent='Algkapital '+S0+'€'
+    document.getElementById('gpr').textContent=gp?'$'+gp.toFixed(2):'—'
     document.getElementById('gt').textContent=st.trend?st.trend.toUpperCase():'—'
     // KÕIK avatud positsioonid, mitte ainult vana grid. Portfelli jalgadel on
     // regime='portfolio' ja session='pf_XAUUSD' jne — varem jäid need täiesti
@@ -321,7 +326,7 @@ async function load(){
     document.getElementById('ig').innerHTML=active.map(sym=>{
       const info=I[sym]||{...DEF,n:sym}
       const isG=sym==='XAUUSD',sp=allpos.filter(p=>symOf(p)===sym).length
-      const price=isG&&st.price?'$'+parseFloat(st.price).toFixed(2):'—'
+      const price=isG&&gp?'$'+gp.toFixed(2):'—'
       const trend=isG?(st.trend||'neutral'):'ranging'
       const bc=trend==='bull'?'bull':trend==='bear'?'bear':trend==='ranging'?'rng':'neu'
       const trendEt=trend==='bull'?'TÕUSUTREND':trend==='bear'?'LANGUSTREND':trend==='ranging'?'KÜLGSUUNAS':'NEUTRAALNE'
@@ -329,7 +334,15 @@ async function load(){
     }).join('')
 
     const pb=document.getElementById('pb')
-    if(!allpos.length){pb.innerHTML='<div class="gcard emptybox">Aktiivseid positsioone pole</div>'}
+    if(!allpos.length&&Math.abs(eqDiff)>0.01){
+      // Equity erineb balansist -> MT5-s ON avatud positsioone. Aga bot ei
+      // jalgi neid (signals-tabelis pole executed=false ridu). Varem naitas
+      // dashboard siin julgelt "positsioone pole", mis oli otsene vale.
+      pb.innerHTML='<div class="gcard emptybox" style="color:var(--red)">'+
+        '⚠️ MT5-s on avatud positsioone ('+(eqDiff>=0?'+':'')+eqDiff.toFixed(2)+
+        '€ floating), aga bot ei jälgi neid. Kontrolli MT5-t käsitsi.</div>'
+    }
+    else if(!allpos.length){pb.innerHTML='<div class="gcard emptybox">Aktiivseid positsioone pole</div>'}
     else pb.innerHTML=allpos.map(p=>{
       const sym=symOf(p),info=I[sym]||DEF,d=dec(info.t)
       const fmt=v=>v==null||v===''?'—':parseFloat(v).toFixed(d)
@@ -337,8 +350,8 @@ async function load(){
       // hetkehind stats'is on. Teiste jalgade puhul jääb lahter tühjaks,
       // mitte ei näidata valet numbrit kulla hinna pealt.
       let plTxt='—',plCls=''
-      if(sym==='XAUUSD'&&st.price&&p.entry){
-        const diff=p.direction==='buy'?(+st.price-+p.entry):(+p.entry-+st.price)
+      if(sym==='XAUUSD'&&gp&&p.entry){
+        const diff=p.direction==='buy'?(gp-+p.entry):(+p.entry-gp)
         plTxt=(diff>=0?'+':'')+diff.toFixed(2)
         plCls=diff>=0?'pos':'neg'
       }
