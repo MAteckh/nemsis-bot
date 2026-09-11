@@ -608,16 +608,24 @@ def sync_mt5_positions():
     seetõttu dashboardil "0 avatud positsiooni" kõrval, kuigi floating P&L
     näitas raha — sync ei teadnud sellest positsioonist üldse.
 
-    Tundmatute positsioonide leidmiseks kasutatakse get_all_positions()'i
-    (KÕIK positsioonid, sõltumata magic-numbrist), mitte get_open_positions()'i
-    (magic=MAGIC filtriga) — käsitsi MT5 terminalis avatud tehingud kannavad
-    tavaliselt magic=0 ja jäid muidu samamoodi nähtamatuks kui bot omal ajal
-    Supabase'ist puudu jäänud positsioonid.
+    Tundmatute positsioonide leidmiseks JA sulgemise tuvastamiseks
+    kasutatakse get_all_positions()'i (KÕIK positsioonid, sõltumata
+    magic-numbrist) — mitte get_open_positions()'i (magic=MAGIC filtriga).
+    Käsitsi MT5 terminalis avatud tehingud kannavad tavaliselt magic=0.
+
+    PARANDATUD (11 sept 2026, samal päeval kui esimene versioon): esimene
+    versioon kontrollis sulgemist get_open_positions()'i (magic=MAGIC)
+    vastu KÕIGI, ka "recovered" ridade jaoks. "Recovered" positsioon
+    (nt käsitsi avatud, teine magic) ei ole SELLES nimekirjas KUNAGI,
+    seega näis ta igal skannil "suletuna" — bot kirjutas trades-tabelisse
+    vale kirje (pnl=0, "suletud", kuigi tegelikult lahti), leidis ta
+    järgmisel skannil uuesti "tundmatuna" ja tsükkel kordus lõputult.
+    Live'is jõudis see tekitada 13 duplikaat-rida signals+trades tabelisse
+    ja 13 Telegrami hoiatust ~28 minuti jooksul, enne kui märgati. Õige
+    kontroll: KÕIK jälgitud read (ükskõik mis režiim) peavad võrduma
+    all_tickets vastu, sest see sisaldab magic-filtreeritud hulka + kõike muud.
     """
     try:
-        mt5_open = ct.get_open_positions()
-        mt5_tickets = {p["ticket"] for p in mt5_open}
-
         all_open = ct.get_all_positions()
         all_by_ticket = {p["ticket"]: p for p in all_open}
         all_tickets = set(all_by_ticket)
@@ -631,7 +639,7 @@ def sync_mt5_positions():
             ticket = pos.get("mt5_ticket")
             if ticket is None:
                 continue  # vanad positsioonid ilma ticketita — jäta rahule
-            if int(ticket) not in mt5_tickets:
+            if int(ticket) not in all_tickets:
                 # MT5-s suletud aga Supabase-s lahti — too PÄRIS tulemus
                 # tehinguajaloost ja logi trades-tabelisse.
                 deal = ct.get_closed_deal_pnl(ticket)
@@ -682,7 +690,7 @@ def sync_mt5_positions():
                 sb_upsert("bot_state", {"id": 1, "balance": round(float(real_balance), 2)})
                 add_log(f"🔄 Sync: balance uuendatud päris MT5 väärtusega {real_balance:.2f}€")
 
-        return mt5_tickets
+        return all_tickets
     except Exception as e:
         logger.error(f"sync_mt5_positions viga: {e}")
         return set()
