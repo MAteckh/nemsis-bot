@@ -247,6 +247,33 @@ GRID_CONFIG = {
     "risk_pct":       0.015,
     "risk_lot_max":   0.5,
 
+    # ── STRATEEGIA REŽIIM (11 Sept 2026) ────────────────────
+    # "grid"         = vana trend-grid + scalp (see, mis seni live's jooksis)
+    # "core_overlay" = tuumikpositsioon (osta ja hoia) + donchian väljamurde
+    #                  ülekiht, mis võib minna mõlemale poole
+    #
+    # Miks: 7 aasta päevaandmetel (2020-2026, kulud sees, 200 EUR konto)
+    #   ainult grid, praegused parameetrid ....  +61 EUR   drawdown -81%
+    #   osta ja hoia ........................  +2840 EUR   drawdown -61%
+    #   tuumik + donchian20 ülekiht .........  +4834 EUR   drawdown -70%
+    # Live kinnitas grid'i numbrit: konto liikus 2 kuuga +2,35 EUR.
+    #
+    # AUSAD PIIRANGUD, mida peab teadma enne live'i lülitamist:
+    #  - Tuumikut EI SULETA nädalavahetuseks (muidu pole see "hoidmine") —
+    #    seega nädalavahetuse gap-risk on reaalne ja uus.
+    #  - 2021 (kuld -6%) kaotasid MÕLEMAD jalad: tuumik -117, ülekiht -126.
+    #    See ei ole langusekindel strateegia, vaid rohkem eksponeeringut.
+    #  - Testitud päevabaaridel; live skaneerib tunnibaaridel.
+    "strategy_mode": "grid",
+
+    "core_enabled":   True,    # tuumikpositsioon sisse (ainult core_overlay režiimis)
+    "core_lot":       0.01,
+    "overlay_enabled": True,   # donchian ülekiht sisse
+    "bo_lookback":    20,
+    "bo_sl_atr":      1.5,
+    "bo_tp_atr":      3.0,
+    "overlay_max_pos": 1,
+
     # ── Scalp-kihi parameetrid (10 Sept 2026) ───────────────
     # Toodud config'i, et neid saaks backtest.py's testida ilma koodi
     # muutmata (varem olid need hard-coded main_v4.py sees).

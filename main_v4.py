@@ -595,6 +595,111 @@ def check_daily_equity_halt():
         return True
     return False
 
+def get_core_position():
+    """Tuumikpositsioon (osta ja hoia) — session='core'."""
+    rows = sb_select("signals", "executed=eq.false&session=eq.core&limit=1")
+    return rows[0] if rows else None
+
+
+def get_overlay_positions():
+    return sb_select("signals", "executed=eq.false&session=eq.overlay&order=created_at.asc")
+
+
+def run_gold_core_overlay(price, high, low, now, df):
+    """
+    TUUMIK + ÜLEKIHT (config: strategy_mode="core_overlay").
+
+    Tuumik: üks ostupositsioon, mida hoitakse. Ei suleta nädalavahetuseks —
+            see on teadlik valik (muidu pole see hoidmine), aga tähendab
+            reaalset gap-riski.
+    Ülekiht: donchian väljamurre mõlemas suunas, ATR-põhine SL/TP, riskipõhine
+            lot. Ülekiht võib minna lühikeseks, tuumik mitte.
+
+    Kaitsed, mis jäävad kehtima: päevalimiit, circuit breaker (main loop'is),
+    uudiste-aken ülekihi sisenemistele.
+    """
+    cfg = GRID_CONFIG
+
+    # ── TUUMIK ──
+    if cfg.get("core_enabled", True) and now.weekday() < 5:
+        core = get_core_position()
+        if core is None and not gold_logic.is_news_blackout(now):
+            lot = float(cfg.get("core_lot", 0.01))
+            res = ct.place_order("buy", "XAUUSD", lot)
+            if "error" in res:
+                add_log(f"❌ Tuumiku avamine ebaõnnestus: {res['error']}")
+            else:
+                ok = sb_insert("signals", {
+                    "direction": "buy", "entry": round(price, 2), "tp": None, "sl": None,
+                    "lot": lot, "regime": "core_overlay", "session": "core",
+                    "executed": False, "breakeven": False, "atr": 0, "score": 0,
+                    "mt5_ticket": res.get("orderId"),
+                })
+                add_log(f"🟢 TUUMIK avatud @ {price:.2f} lot={lot} (ticket {res.get('orderId')})")
+                send_telegram(f"🟢 <b>Tuumikpositsioon avatud</b>\nBUY {lot} @ {price:.2f}\nSeda hoitakse — TP/SL puudub.")
+                if not ok:
+                    logger.error(f"🚨 KRIITILINE: tuumik {res.get('orderId')} täitus, Supabase salvestus ebaõnnestus — JÄLGIMATA!")
+                    send_telegram(f"🚨 <b>KRIITILINE</b>\nTuumik {res.get('orderId')} täitus MT5-l, aga andmebaasi ei jõudnud. Kontrolli käsitsi!")
+
+    if not cfg.get("overlay_enabled", True):
+        return
+
+    # ── ÜLEKIHT: sulgemiste kontroll ──
+    balance = get_balance()
+    for pos in get_overlay_positions():
+        entry, d = float(pos.get("entry", 0)), pos.get("direction", "buy")
+        tp, sl = pos.get("tp"), pos.get("sl")
+        hit = None
+        if tp is not None and ((high >= float(tp)) if d == "buy" else (low <= float(tp))):
+            hit = ("TP", float(tp))
+        elif sl is not None and ((low <= float(sl)) if d == "buy" else (high >= float(sl))):
+            hit = ("SL", float(sl))
+        if not hit:
+            continue
+        label, level = hit
+        lot = float(pos.get("lot") or 0.01)
+        pnl = (level - entry) * lot * 100 if d == "buy" else (entry - level) * lot * 100
+        sb_upsert("signals", {"id": pos["id"], "executed": True})
+        add_log(f"{'✅' if pnl > 0 else '🛑'} Ülekiht {label}: {d.upper()} {entry:.2f}→{level:.2f}  {pnl:+.2f}€")
+        send_telegram(f"{'✅' if pnl > 0 else '🛑'} <b>Ülekiht {label}</b>\n{d.upper()} {entry:.2f}→{level:.2f}\n{pnl:+.2f}€")
+
+    # ── ÜLEKIHT: uus signaal ──
+    if now.weekday() >= 5 or gold_logic.is_news_blackout(now):
+        return
+    open_ov = get_overlay_positions()
+    if len(open_ov) >= int(cfg.get("overlay_max_pos", 1)):
+        return
+    if df is None:
+        return
+    atr_val = _atr_history[-1] if _atr_history else gold_logic.calc_atr(df)
+    sig = gold_logic.donchian_signal(df, int(cfg.get("bo_lookback", 20)), atr_val, cfg)
+    if sig is None:
+        return
+    direction, sl_dist, tp_dist = sig
+    if open_ov and open_ov[0].get("direction") != direction:
+        return  # ei ava hedge ülekihi sees
+    lot = gold_logic.get_risk_based_lot(balance, sl_dist, 100.0,
+                                        cfg.get("risk_pct", 0.015),
+                                        max_lot=cfg.get("risk_lot_max", 0.5))
+    tp = round(price + tp_dist if direction == "buy" else price - tp_dist, 2)
+    sl = round(price - sl_dist if direction == "buy" else price + sl_dist, 2)
+    res = ct.place_order(direction, "XAUUSD", lot, tp=tp, sl=sl)
+    if "error" in res:
+        add_log(f"❌ Ülekihi order ebaõnnestus: {res['error']}")
+        return
+    ok = sb_insert("signals", {
+        "direction": direction, "entry": round(price, 2), "tp": tp, "sl": sl,
+        "lot": lot, "regime": "core_overlay", "session": "overlay",
+        "executed": False, "breakeven": False, "atr": round(atr_val, 2), "score": 0,
+        "mt5_ticket": res.get("orderId"),
+    })
+    add_log(f"📊 Ülekiht {direction.upper()} @ {price:.2f} lot={lot} TP:{tp:.2f} SL:{sl:.2f}")
+    send_telegram(f"📊 <b>Ülekiht {direction.upper()}</b>\n@ {price:.2f} lot={lot}\nTP {tp:.2f} | SL {sl:.2f}")
+    if not ok:
+        logger.error(f"🚨 KRIITILINE: ülekiht {res.get('orderId')} täitus, Supabase salvestus ebaõnnestus — JÄLGIMATA!")
+        send_telegram(f"🚨 <b>KRIITILINE</b>\nÜlekiht {res.get('orderId')} täitus MT5-l, aga andmebaasi ei jõudnud. Kontrolli käsitsi!")
+
+
 def run_gold_grid(price, high, low, now):
     # ── NÄDALAVAHETUS — reede 21:00 UTC sulge kõik, lau/püha ei kauple üldse ──
     # (sama muster mis strategy_meanrev.py-s forexile juba olemas —
@@ -1042,7 +1147,12 @@ def main():
                                 high_gold = round(price_gold * 1.005, 2)
                                 low_gold  = round(price_gold * 0.995, 2)
                             add_log(f"🥇 Gold: ${price_gold:.2f}")
-                            run_gold_grid(price_gold, high_gold, low_gold, now)
+                            if GRID_CONFIG.get("strategy_mode", "grid") == "core_overlay":
+                                if df_gold is not None:
+                                    calc_atr_gold(df_gold)
+                                run_gold_core_overlay(price_gold, high_gold, low_gold, now, df_gold)
+                            else:
+                                run_gold_grid(price_gold, high_gold, low_gold, now)
                     else:
                         add_log("⚠️ Gold: hind puudub cTrader-ist")
                 except Exception as e:

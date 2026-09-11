@@ -297,6 +297,34 @@ def update_trailing_sl(direction, entry, current_price, current_sl, atr, cfg):
         return min(current_sl, round(new_sl, 2))
 
 
+def donchian_signal(df, lookback, atr, cfg):
+    """
+    Donchian väljamurre — ülekihi signaal "tuumik + ülekiht" strateegias.
+
+    Sulgumine üle viimase `lookback` baari tipu = ost, alla põhja = müük.
+    Vaatab AINULT lõpetatud baare (viimane baar välja arvatud tipu/põhja
+    arvutusest), et signaal ei saaks iseennast käivitada.
+
+    Tagastab None või (suund, sl_kaugus, tp_kaugus).
+
+    Miks just see: 11 strateegiaperekonna võrdluses (2 aastat H1 + 7 aastat
+    päevaandmeid) oli trendijärgimine/väljamurre AINUS perekond, millel oli
+    kullal püsiv serv. Mean reversion (RSI/Bollinger fade) oli kullal selgelt
+    kahjumlik, kuigi S&P 500-l parim.
+    """
+    if df is None or len(df) < lookback + 2 or atr <= 0:
+        return None
+    prior = df.iloc[-(lookback + 1):-1]
+    price = float(df["close"].iloc[-1])
+    sl_dist = cfg.get("bo_sl_atr", 1.5) * atr
+    tp_dist = cfg.get("bo_tp_atr", 3.0) * atr
+    if price > float(prior["high"].max()):
+        return "buy", sl_dist, tp_dist
+    if price < float(prior["low"].min()):
+        return "sell", sl_dist, tp_dist
+    return None
+
+
 def is_news_blackout(now):
     """
     Uudiste-aken, mil uusi positsioone EI avata (olemasolevaid hallatakse
