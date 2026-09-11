@@ -109,6 +109,81 @@ def send_telegram(text):
 
 _last_telegram_update_id = 0
 
+
+def _bot_dir():
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+def do_restart(reason="käsk"):
+    """
+    Taaskäivita bot: asenda praegune protsess uuega, mis loeb kettalt
+    värske koodi. Töötab nii Windowsil kui Linuxil.
+
+    Lahtised positsioonid EI muutu — need on brokeri juures koos oma TP/SL-iga
+    ja bot loeb need käivitumisel Supabase'ist + MT5-st uuesti sisse.
+    """
+    add_log(f"🔄 Taaskäivitus: {reason}")
+    send_telegram(f"🔄 <b>Bot taaskäivitub</b>\nPõhjus: {reason}\nAnnan käivitumisest teada.")
+    try:
+        for h in logging.getLogger().handlers:
+            h.flush()
+    except Exception:
+        pass
+    time.sleep(1)  # anna Telegrami sõnumil väljuda
+    os.execv(sys.executable, [sys.executable] + sys.argv)
+
+
+def do_update():
+    """
+    Kaugdeploy: git pull + taaskäivitus.
+
+    KRIITILINE KAITSE: pärast pull'i kontrollitakse, kas uus kood üldse
+    kompileerub. Kui ei, siis EI taaskäivitata — muidu jääks bot maha ja
+    seda ei saaks enam telefonist üles. Sellisel juhul jookseb vana kood
+    (mälus) edasi ja Telegrami tuleb veateade.
+    """
+    import subprocess
+    d = _bot_dir()
+    send_telegram("⬇️ <b>Uuendan koodi…</b>")
+    try:
+        r = subprocess.run(["git", "pull"], cwd=d, capture_output=True, text=True, timeout=120)
+        out = ((r.stdout or "") + (r.stderr or "")).strip()[-600:]
+    except Exception as e:
+        add_log(f"❌ git pull ebaõnnestus: {e}")
+        send_telegram(f"❌ <b>git pull ebaõnnestus</b>\n{str(e)[:300]}\nBot jookseb vana koodiga edasi.")
+        return
+
+    if r.returncode != 0:
+        add_log(f"❌ git pull viga: {out}")
+        send_telegram(f"❌ <b>git pull viga</b>\n<code>{out[:300]}</code>\nBot jookseb vana koodiga edasi.")
+        return
+
+    if "Already up to date" in out or "Already up-to-date" in out:
+        send_telegram(f"ℹ️ <b>Uut koodi ei olnud</b>\n<code>{out[:200]}</code>\nTaaskäivitust ei tehtud.")
+        return
+
+    # Kontrolli, et uus kood kompileerub ENNE taaskäivitust
+    bad = []
+    for fn in ("main_v4.py", "config.py", "gold_logic.py", "strategies.py",
+               "mt5_connector.py", "strategy_meanrev.py"):
+        p = os.path.join(d, fn)
+        if not os.path.exists(p):
+            continue
+        c = subprocess.run([sys.executable, "-m", "py_compile", p],
+                           capture_output=True, text=True)
+        if c.returncode != 0:
+            bad.append(f"{fn}: {(c.stderr or '')[-200:]}")
+    if bad:
+        add_log(f"🚨 Uus kood EI kompileeru, taaskäivitus tühistatud: {bad}")
+        send_telegram("🚨 <b>Uus kood on katki — taaskäivitust EI tehtud</b>\n"
+                      + "\n".join(f"<code>{b}</code>" for b in bad)[:600]
+                      + "\n\nBot jookseb vana koodiga edasi.")
+        return
+
+    send_telegram(f"✅ <b>Kood uuendatud</b>\n<code>{out[:300]}</code>")
+    do_restart("Telegrami käsk /update")
+
+
 def check_telegram_commands():
     """
     Kontrolli Telegramis uusi sõnumeid — võimaldab kaugjuhtimisega
@@ -118,6 +193,9 @@ def check_telegram_commands():
     /reset või /resume — eemaldab nii circuit breaker'i kui päevalimiidi
                           peatuse, kaupleb kohe jälle edasi
     /status             — saadab hetke balance + equity
+    /restart            — taaskäivitab boti (võtab kettal oleva koodi kasutusele)
+    /update             — git pull + taaskäivitus (kaugdeploy telefonist)
+    /help               — käskude nimekiri
     Kaitsemehhanismid ise (circuit breaker, päevalimiit) jäävad täielikult
     alles — see ainult annab mugava viisi neid vajadusel käsitsi lähtestada.
     """
@@ -161,6 +239,22 @@ def check_telegram_commands():
                 bal = get_balance()
                 eq  = get_account_equity()
                 send_telegram(f"📊 <b>Staatus</b>\nBalance: {bal:.2f}€\nEquity: {eq:.2f}€")
+
+            elif text == "/help":
+                send_telegram(
+                    "🤖 <b>Käsud</b>\n"
+                    "/status — balance ja equity\n"
+                    "/reset — eemalda pausid (circuit breaker, päevalimiit)\n"
+                    "/restart — taaskäivita bot (kettal olev kood)\n"
+                    "/update — tõmba GitHubist uus kood ja taaskäivita\n"
+                    "/help — see nimekiri"
+                )
+
+            elif text == "/restart":
+                do_restart("Telegrami käsk /restart")
+
+            elif text == "/update":
+                do_update()
 
     except Exception as e:
         logger.error(f"Telegram commands check: {e}")
