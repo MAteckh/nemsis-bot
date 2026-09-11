@@ -79,6 +79,29 @@ def get_risk_based_lot(balance, sl_distance, pip_value, risk_pct, min_lot=0.01, 
     return max(min_lot, min(round(lot, 3), max_lot))
 
 
+def get_hwm_risk_mult(equity, hwm, cfg):
+    """
+    Tipptaseme-põhine (high-water-mark) riski vähendamine.
+
+    Olemasolev circuit breaker mõõdab kahjumit NÄDALA/PÄEVA algusest ja
+    nullib ankru iga uue perioodiga — seetõttu ei takista see mitme halva
+    nädala kuhjumist üheks sügavaks drawdown'iks (2a H1 backtestis jõudis
+    see -54%...-87%-ni, kuigi ükski üksik nädal ei ületanud -15%).
+
+    See mõõdab kahjumit KÕIGE KÕRGEMAST saavutatud tasemest ja vähendab
+    riski astmeliselt, taastudes automaatselt, kui konto taastub.
+    Tagastab kordaja 0.0-1.0 (0.0 = ära ava uusi positsioone).
+    """
+    if hwm <= 0:
+        return 1.0
+    dd = (hwm - equity) / hwm
+    mult = 1.0
+    for threshold, tier_mult in sorted(cfg.get("hwm_tiers", [(0.15, 0.5), (0.25, 0.25), (0.35, 0.0)])):
+        if dd >= threshold:
+            mult = tier_mult
+    return mult
+
+
 def get_dynamic_grid_size(atr, cfg):
     """
     Grid-sammu skaleerimine ATR järgi — vaikimisi VÄLJAS (grid_cfg["dynamic_grid_size"]).

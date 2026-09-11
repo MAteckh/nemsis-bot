@@ -174,6 +174,7 @@ def simulate_gold_grid(df, grid_cfg=None, instrument_cfg=None, account_balance=2
     week_start_balance = balance
     paused_day = False
     paused_week = False
+    hwm = balance
 
     for i in range(min_history, len(df)):
         # Piiratud (mitte kasvav) aken — kõik allolevad funktsioonid vajavad
@@ -290,6 +291,17 @@ def simulate_gold_grid(df, grid_cfg=None, instrument_cfg=None, account_balance=2
             paused_day = True
         risk_halt = paused_day or paused_week
 
+        # ── HWM (tipptaseme-põhine) riski vähendamine ──
+        # Erinevalt nädala/päeva circuit breaker'ist mõõdab see kahjumit KÕIGE
+        # KÕRGEMAST saavutatud tasemest, nii et mitu halba nädalat järjest ei
+        # saa vaikselt kuhjuda üheks sügavaks drawdown'iks.
+        hwm = max(hwm, cur_equity)
+        hwm_mult = 1.0
+        if grid_cfg.get("hwm_derisk", False):
+            hwm_mult = gold_logic.get_hwm_risk_mult(cur_equity, hwm, grid_cfg)
+            if hwm_mult <= 0:
+                risk_halt = True
+
         # ── grid init / reset ──
         if grid_state is None:
             if effective_trend != "neutral" and not news_blackout and not risk_halt and adx_ok:
@@ -353,7 +365,7 @@ def simulate_gold_grid(df, grid_cfg=None, instrument_cfg=None, account_balance=2
                     if grid_cfg.get("risk_based_lot"):
                         order_lot = gold_logic.get_risk_based_lot(
                             balance, abs(price - sl), pip_value,
-                            grid_cfg.get("risk_pct", 0.015), max_lot=grid_cfg.get("risk_lot_max", 0.5))
+                            grid_cfg.get("risk_pct", 0.015) * hwm_mult, max_lot=grid_cfg.get("risk_lot_max", 0.5))
                     else:
                         order_lot = lot
                     open_positions.append(Trade(direction, price, tp, sl, order_lot, now))
@@ -384,7 +396,7 @@ def simulate_gold_grid(df, grid_cfg=None, instrument_cfg=None, account_balance=2
                         bo_sl, bo_tp = round(price + sl_dist, 2), round(price - tp_dist, 2)
                     bo_lot = gold_logic.get_risk_based_lot(
                         balance, sl_dist, pip_value,
-                        grid_cfg.get("risk_pct", 0.015), max_lot=grid_cfg.get("risk_lot_max", 0.5)) \
+                        grid_cfg.get("risk_pct", 0.015) * hwm_mult, max_lot=grid_cfg.get("risk_lot_max", 0.5)) \
                         if grid_cfg.get("risk_based_lot") else lot
                     open_positions.append(Trade(bo_dir, price, bo_tp, bo_sl, bo_lot, now, engine="breakout"))
                     last_order_bar = i
