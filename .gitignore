@@ -10,3 +10,6 @@ bot/data/*
 !bot/data/RATES_m.csv
 bot/grid_fixes_tulemus.txt
 bot/grid_tpsl_tulemus.txt
+bot/grid_windows_tulemus.txt
+bot/grid_protect_tulemus.txt
+bot/grid_trendperiod_tulemus.txt
