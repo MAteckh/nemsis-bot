@@ -360,8 +360,12 @@ def simulate_gold_grid(df, grid_cfg=None, instrument_cfg=None, account_balance=2
                         swing_low, swing_high = gold_logic.get_swing_levels(window, lookback=20)
                         tp, sl = gold_logic.calc_gold_tp_sl(direction, price, atr_val, swing_low, swing_high, grid_cfg)
                     else:
-                        tp = round(price + 30.0 if direction == "buy" else price - 30.0, 2)
-                        sl = round(price - 45.0 if direction == "buy" else price + 45.0, 2)
+                        # Varem literaalid 30.0/45.0 — samad, mis main_v4.py-s.
+                        # Nüüd config'ist, et backtest ja live EI SAAKS lahku minna.
+                        gtp = float(grid_cfg.get("grid_tp_usd", 30.0))
+                        gsl = float(grid_cfg.get("grid_sl_usd", 45.0))
+                        tp = round(price + gtp if direction == "buy" else price - gtp, 2)
+                        sl = round(price - gsl if direction == "buy" else price + gsl, 2)
                     if grid_cfg.get("risk_based_lot"):
                         order_lot = gold_logic.get_risk_based_lot(
                             balance, abs(price - sl), pip_value,

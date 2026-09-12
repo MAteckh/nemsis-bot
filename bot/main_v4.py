@@ -744,6 +744,19 @@ def calc_gold_tp_sl(direction, level, atr, swing_low, swing_high):
     return gold_logic.calc_gold_tp_sl(direction, level, atr, swing_low, swing_high, GRID_CONFIG)
 
 
+def grid_tp_sl_dist():
+    """
+    Gridi staatiline TP/SL kaugus dollarites, config'ist.
+
+    Need olid varem literaalidena neljas kohas (order placement +
+    kolm send_grid_signals kutset + backtest.py). Sellepärast ei
+    mõjutanud config'i tp_min/tp_max/sl_max gridi kuidagi.
+    Vaikeväärtused on täpselt endised, seega käitumine ei muutu.
+    """
+    return (float(GRID_CONFIG.get("grid_tp_usd", 30.0)),
+            float(GRID_CONFIG.get("grid_sl_usd", 45.0)))
+
+
 def send_grid_signals(center, trend, gs, tp_dist, sl_dist, lot):
     """
     Saada Telegrami valmis grid tasemed XTrend käsitsi sisestamiseks.
@@ -1139,7 +1152,7 @@ def run_gold_grid(price, high, low, now):
         save_grid_state({"center":center,"trend":effective_trend,"pending":pending})
         add_log(f"🔲 Gold grid initsialiseeritud @ ${center:.0f} | {effective_trend}")
         # Saada XTrend signaalid käsitsi sisestamiseks
-        send_grid_signals(center, effective_trend, effective_gs, 30.0, 45.0, get_compound_lot(balance))
+        send_grid_signals(center, effective_trend, effective_gs, *grid_tp_sl_dist(), get_compound_lot(balance))
         return
 
     pending    = grid_state.get("pending", {})
@@ -1152,7 +1165,7 @@ def run_gold_grid(price, high, low, now):
         reset_trend = effective_trend if effective_trend != "neutral" else grid_trend
         save_grid_state({"center":new_c,"trend":reset_trend,"pending":gold_logic.setup_grid(new_c, reset_trend, effective_gs, gl)})
         add_log(f"🔄 Grid auto-reset: hind ${price:.0f} kaugel keskusest ${grid_center:.0f}")
-        send_grid_signals(new_c, reset_trend, effective_gs, 30.0, 45.0, get_compound_lot(balance))
+        send_grid_signals(new_c, reset_trend, effective_gs, *grid_tp_sl_dist(), get_compound_lot(balance))
         return
 
     if effective_trend != grid_trend and effective_trend != "neutral":
@@ -1189,7 +1202,7 @@ def run_gold_grid(price, high, low, now):
             new_c = round(price/effective_gs)*effective_gs
             save_grid_state({"center":new_c,"trend":effective_trend,"pending":gold_logic.setup_grid(new_c, effective_trend, effective_gs, gl)})
             add_log(f"🔄 Gold grid reset: {grid_trend}→{effective_trend}")
-            send_grid_signals(new_c, effective_trend, effective_gs, 30.0, 45.0, get_compound_lot(balance))
+            send_grid_signals(new_c, effective_trend, effective_gs, *grid_tp_sl_dist(), get_compound_lot(balance))
         else:
             # ADX liiga madal uue grid'i jaoks — sulge vastutrendi positsioonid
             # (juba tehtud ülal), aga ÄRA ava uut suunda enne kui trend
@@ -1274,8 +1287,13 @@ def run_gold_grid(price, high, low, now):
             swing_low, swing_high = gold_logic.get_swing_levels(df, lookback=20)
             tp, sl = gold_logic.calc_gold_tp_sl(direction, price, atr_val, swing_low, swing_high, GRID_CONFIG)
         else:
-            tp = round(price + 30.0 if direction=="buy" else price - 30.0, 2)
-            sl = round(price - 45.0 if direction=="buy" else price + 45.0, 2)
+            # Varem olid 30.0 ja 45.0 siin literaalidena — config'i tp_min/
+            # tp_max/sl_max EI MÕJUTANUD gridi kuidagi. Nüüd tulevad config'ist
+            # (vaikimisi täpselt samad 30/45 => käitumine ei muutu).
+            gtp = float(GRID_CONFIG.get("grid_tp_usd", 30.0))
+            gsl = float(GRID_CONFIG.get("grid_sl_usd", 45.0))
+            tp = round(price + gtp if direction=="buy" else price - gtp, 2)
+            sl = round(price - gsl if direction=="buy" else price + gsl, 2)
         # KAITSE 1: max 3 lahtist positsiooni (variant C — backtest +422€/kuu)
         open_now = ct.get_open_positions("XAUUSD")
         if len(open_now) >= 3:

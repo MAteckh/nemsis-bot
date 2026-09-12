@@ -208,6 +208,27 @@ GRID_CONFIG = {
     "sl_buffer":      10.0,
     "sl_max":         80.0,
 
+    # ── STAATILINE grid TP/SL (12 Sept 2026) ─────────────────
+    # Kui dynamic_tp_sl = False (praegune seis), kasutab grid FIKSEERITUD
+    # TP/SL kaugust. Need olid varem koodi sisse kirjutatud literaalidena
+    # kolmes kohas (main_v4.py order placement + send_grid_signals kutsed,
+    # backtest.py simulaator), mistõttu ülalolevad tp_min/tp_max/sl_max
+    # EI MÕJUTANUD gridi kuidagi — ma keerasin neid ja backtest andis
+    # täpselt sama tulemuse, sest grid ei lugenud neid kunagi.
+    #
+    # Nüüd on nad siin ja config juhib päriselt.
+    # VÄÄRTUSED ON TÄPSELT SAMAD, mis olid koodi sees => käitumine EI MUUTU.
+    #
+    # HOIATUS ENNE KEERAMIST: testisin 14 erinevat TP/SL suhet
+    # (bot/run_grid_tpsl.py) ja KÕIK 14 sõid 200€ konto tühjaks.
+    # Vastuoluliselt on "paremad" suhted HALVEMAD: TP 60 / SL 30 (vajab
+    # ainult 33% võite) andis -812€, halvima tulemuse kogu testis, sest
+    # laiem TP hoiab positsioone kauem lahti ja float_stop/trend_reset
+    # tulevad tihedamini peale (tehinguid 289 -> 413).
+    # Praegune 30/45 vajab 60% võite; ajalugu andis 62.6%.
+    "grid_tp_usd":    30.0,
+    "grid_sl_usd":    45.0,
+
     # ── ATR-põhine adaptiivne grid-samm (10 Sept 2026) ───────
     # Fikseeritud $15 samm on rahulikul turul liiga tihe (positsioonid
     # koonduvad samasse liikumisse = korreleeritud risk) ja kiirel turul
