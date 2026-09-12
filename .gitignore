@@ -8,3 +8,5 @@ bot/data/*
 # erand: lühiajaliste intressimäärade ajalugu on avalik viiteandmestik
 # (T-bill), vajalik research.py finantseerimismudeli reprodutseerimiseks
 !bot/data/RATES_m.csv
+bot/grid_fixes_tulemus.txt
+bot/grid_tpsl_tulemus.txt
