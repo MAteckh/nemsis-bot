@@ -541,8 +541,20 @@ def get_compound_lot(balance):
     return gold_logic.get_compound_lot(balance, ACCOUNT_BALANCE, _atr_history, GRID_CONFIG)
 
 def get_scaled_max_float(balance):
-    """Max floating loss skaleerub koos kontoga."""
-    return GRID_CONFIG["max_float"] * (balance / ACCOUNT_BALANCE)
+    """
+    Max floating loss skaleerub koos kontoga.
+
+    PARANDATUD 12. sept 2026 — MÄRGIVIGA. Varem oli see lihtsalt
+    max_float * (balance / ACCOUNT_BALANCE). Kui balance läheb
+    NEGATIIVSEKS, muutub tulemus negatiivseks, ja kutsuja võrdlus
+    `if fl < -get_scaled_max_float(balance)` pöördub ümber:
+    -(-suur) = +suur, ja `fl < +suur` on tõene IGA positsiooni jaoks,
+    ka kasumis oleva jaoks => bot sulgeks kõik.
+    Päris MT5 balance ei lähe tavaliselt miinusesse (broker teeb
+    stop-out'i enne), aga see on tasuta kaitse ja backtestis juhtus
+    see pidevalt — vt bot/run_grid_noprotect.py.
+    """
+    return GRID_CONFIG["max_float"] * (max(float(balance), 0.0) / ACCOUNT_BALANCE)
 
 def get_grid_state():
     rows = sb_select("bot_state", "id=eq.1&select=risk")
@@ -1169,7 +1181,11 @@ def run_gold_grid(price, high, low, now):
         return
 
     if effective_trend != grid_trend and effective_trend != "neutral":
-        open_pos = get_gold_positions()
+        # trend_reset_close=False => ÄRA sule positsioone trendipöördel, las
+        # nad jõuavad broker'i TP/SL-ini. Grid re-tsentreeritakse ikka
+        # (allpool). Vaikimisi True = senine käitumine.
+        # Vt config.py kommentaari ja bot/run_grid_noprotect.py testi.
+        open_pos = get_gold_positions() if GRID_CONFIG.get("trend_reset_close", True) else []
         for pos in open_pos:
             entry = float(pos.get("entry",0))
             d     = pos.get("direction","buy")

@@ -269,7 +269,16 @@ def simulate_gold_grid(df, grid_cfg=None, instrument_cfg=None, account_balance=2
         open_positions = still_open
 
         # ── max floating loss (master float stop) ──
-        max_float = grid_cfg["max_float"] * (balance / account_balance)
+        # PARANDATUD 12. sept 2026 — MÄRGIVIGA (sama, mis main_v4.py
+        # get_scaled_max_float()'is). Kui balance läheb negatiivseks, muutus
+        # max_float negatiivseks ja võrdlus `fl < -max_float` pöördus ümber:
+        # -(-suur) = +suur, ja `fl < +suur` on tõene IGA positsiooni jaoks.
+        # Tagajärg: niipea kui simuleeritud konto läks miinusesse, sulges
+        # float_stop KÕIK positsioonid igal baaril — ka siis, kui max_float
+        # oli seatud tohutuks, et ta "välja lülitada". Seetõttu näitasid
+        # kõik varasemad "float_stop VÄLJAS" testid float_stop'i ikka
+        # sadu kordi käivitumas ja need tulemused olid valed.
+        max_float = grid_cfg["max_float"] * (max(balance, 0.0) / account_balance)
         still_open = []
         for pos in open_positions:
             fl = (price - pos.entry) * pos.lot * pip_value if pos.direction == "buy" \
@@ -322,13 +331,16 @@ def simulate_gold_grid(df, grid_cfg=None, instrument_cfg=None, account_balance=2
             grid_state = {"center": new_c, "trend": reset_trend,
                           "pending": gold_logic.setup_grid(new_c, reset_trend, effective_gs, levels)}
         elif effective_trend != grid_trend and effective_trend != "neutral":
-            for pos in open_positions:
-                pnl = (price - pos.entry) * pos.lot * pip_value if pos.direction == "buy" \
-                    else (pos.entry - price) * pos.lot * pip_value
-                pos.closed_at, pos.pnl, pos.reason = now, pnl, "trend_reset"
-                balance += pnl
-                closed_trades.append(pos)
-            open_positions = []
+            # trend_reset_close=False => jäta positsioonid lahti, las nad
+            # jõuavad oma TP/SL-ini. Grid re-tsentreeritakse ikka (allpool).
+            if grid_cfg.get("trend_reset_close", True):
+                for pos in open_positions:
+                    pnl = (price - pos.entry) * pos.lot * pip_value if pos.direction == "buy" \
+                        else (pos.entry - price) * pos.lot * pip_value
+                    pos.closed_at, pos.pnl, pos.reason = now, pnl, "trend_reset"
+                    balance += pnl
+                    closed_trades.append(pos)
+                open_positions = []
             if adx_ok:
                 new_c = round(price / effective_gs) * effective_gs
                 grid_state = {"center": new_c, "trend": effective_trend,

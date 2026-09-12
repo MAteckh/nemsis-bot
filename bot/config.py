@@ -229,6 +229,27 @@ GRID_CONFIG = {
     "grid_tp_usd":    30.0,
     "grid_sl_usd":    45.0,
 
+    # ── trend_reset'i lüliti (12 Sept 2026) ──────────────────
+    # trend_reset sulgeb KÕIK lahtised positsioonid TURUHINNAGA, kui trend
+    # pöördub. Diagnoos (bot/run_grid_windows.py) näitas, et see + float_stop
+    # on koos suurim kahjumi-allikas: viimasel 2 aastal võttis float_stop
+    # -409€ (177 korda) ja trend_reset -210€ (17 korda), kokku -618€ — samal
+    # ajal kui TP/SL tuum oli VÕIDUS (võiduprotsent 65.7%, vajalik 60.0%).
+    # main_v4.py enda kommentaar real ~1129 nimetab trend_reset'i juba varem
+    # "suurimaks üksikuks kahjumi-allikaks chop-turul".
+    #
+    # True  = praegune käitumine (sulge kõik trendipöördel)
+    # False = jäta positsioonid lahti, las nad jõuavad oma TP/SL-ini.
+    #         Grid ise re-tsentreeritakse ikka (see osa jääb tööle).
+    #
+    # VAIKIMISI True => käitumine EI MUUTU.
+    # Matemaatika, mida kaaluda: trend_reset'i keskmine on -12.57$, SL on
+    # -45$. Lahti jättes kaotavad kaotajad 3.5x rohkem, aga osa neist
+    # muutub +30$ võitjaks. Tasuvuspiir on ~43% — kui üle 43% neist oleks
+    # TP-ni jõudnud, on väljalülitamine parem. Seda testib
+    # bot/run_grid_noprotect.py.
+    "trend_reset_close": True,
+
     # ── ATR-põhine adaptiivne grid-samm (10 Sept 2026) ───────
     # Fikseeritud $15 samm on rahulikul turul liiga tihe (positsioonid
     # koonduvad samasse liikumisse = korreleeritud risk) ja kiirel turul
