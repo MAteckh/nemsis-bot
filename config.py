@@ -335,12 +335,40 @@ GRID_CONFIG = {
     "portfolio_legs": [
         {"name": "XAUUSD", "symbol_candidates": ["XAUUSD"],
          "signal": "donchian", "params": {"lookback": 50}, "pip_value": 100.0},
-        {"name": "SPX", "symbol_candidates": ["US500", "SPX500", "USA500", "US500.cash", "SP500"],
-         "signal": "bollinger_fade", "params": {}, "pip_value": 100.0},
-        {"name": "USDJPY", "symbol_candidates": ["USDJPY"],
-         "signal": "donchian_trend", "params": {"lookback": 20, "ema_trend": 200}, "pip_value": 1000.0},
-        {"name": "EURUSD", "symbol_candidates": ["EURUSD"],
-         "signal": "ts_momentum", "params": {"mom_lookback": 60}, "pip_value": 100000.0},
+
+        # ── SPX / USDJPY / EURUSD EEMALDATUD 12. sept 2026 ──────
+        # Kasutaja otsus. Testitulemused, mille pealt see tehti
+        # (bot/run_legs_exact.py, TÄPSELT need seaded, mis siin olid,
+        #  200€ konto, lot 0.01, 10 aastat päevabaare):
+        #
+        #   jalg    signaal         teh    P&L     võit%  madalaim konto
+        #   SPX     bollinger_fade  122 +1369.53€  54.9%   -45.46€ (!)
+        #   USDJPY  donchian_trend   62  +156.24€  38.7%    94.60€
+        #   EURUSD  ts_momentum_60   35  +136.50€  40.0%   165.80€
+        #
+        #   Poolte-test:
+        #   SPX     +372.01€ -> +892.93€   läbib
+        #   USDJPY   -77.40€ ->  +60.87€   EI läbi
+        #   EURUSD    +7.20€ ->  +86.20€   läbib
+        #
+        # Miks nad siiski välja läksid:
+        #  SPX     — teenis kõige rohkem, AGA konto läks -45.46€ ehk
+        #            OTSA. Üks tehing = 53% riski 205€ kontost.
+        #  USDJPY  — ei läbi poolte-testi, risk 16% tehingu kohta.
+        #  EURUSD  — risk on ainus korralik (4.1%), aga serv on ÜKS AASTA:
+        #            2023 üksi +125.40€ = 92% kogu 10 aasta kasumist,
+        #            ilma 2023-ta +11.10€ üheksa aasta peale,
+        #            5/10 positiivset aastat, 2026 praegu -55.40€.
+        #
+        # ⚠️ HOIATUS ALLESJÄÄNUD JALA KOHTA: XAUUSD on nelja hulgast
+        # KÕIGE SUUREMA riskiga. Ühe miinimum-loti (0.01) SL = 2 x ATR
+        # = ~139€, mis on 205€ kontol 68% — mitte portfolio_risk_pct
+        # lubatud 1.5%. Põhjus: get_risk_based_lot arvutab õige loti,
+        # aga see tuleb alla 0.01 ja tagastatakse miinimum.
+        # Circuit breaker (-10% päevas) EI päästa, sest ta peatab ainult
+        # UUED tehingud — avatud positsioon sõidab oma SL-ini.
+        # Kaks kaotust järjest ≈ konto otsas.
+        # Ajaloos käis see jalg 200€-lt 60.34€-ni (-70%).
     ],
 
     # ── Scalp-kihi parameetrid (10 Sept 2026) ───────────────
