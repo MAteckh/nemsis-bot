@@ -331,6 +331,39 @@ GRID_CONFIG = {
     # mis seda saavutas).
     "portfolio_enabled": True,
     "portfolio_risk_pct": 0.015,
+
+    # ── KOVA KAHJUMILAGI TEHINGU KOHTA (12. sept 2026) ──────
+    # Probleem, mida see lahendab: get_risk_based_lot arvutab õige loti,
+    # aga see tuleb alla broker'i miinimumi (0.01) ja tagastatakse
+    # miinimum. Tulemus: portfolio_risk_pct lubab 1.5%, aga PÄRIS risk
+    # oli XAUUSD-l 2 x ATR = 139.53€ = 68% 205€ kontost.
+    #
+    # Nüüd piiratakse SL-i KAUGUST nii, et kahjum ei saa seda ületada.
+    # SL läheb broker'ile, seega kaitse töötab ka siis, kui bot on maas.
+    #
+    # TESTITUD (bot/run_sl_cap.py, XAUUSD donchian(50), 2020-2026,
+    # 200€ konto, lot 0.01) — tihedam stopp EI lõhkunud strateegiat,
+    # vaid PARANDAS seda:
+    #   SL piir      P&L        halvim tehing   madalaim konto
+    #   2xATR    +1672.84€        -171.27€         60.34€   <- oli
+    #    100€    +1801.08€        -100.00€         60.34€
+    #     80€    +1923.65€         -80.00€         60.34€
+    #     60€    +2063.65€         -60.00€         60.34€
+    #     45€    +2134.76€         -45.00€         62.10€   <- PARIM
+    #     30€    +1916.91€         -33.00€        -31.26€
+    #     20€    +1518.13€         -28.00€         93.53€
+    # Kõver on sujuv plato (100->80->60->45->30->20), mitte terav tipp.
+    #
+    # ⚠️ MIDA SEE EI LAHENDA: max drawdown jääb -78% (madalaim 62.10€).
+    # Lagi piirab ÜHE tehingu kahjumit, mitte kaotusseeriat. 45€ on
+    # 22% kontost, seega 5 kaotust järjest viib konto ~27%-ni.
+    "portfolio_max_loss_eur": 45.0,
+
+    # Korraga lahti max N positsiooni KOKKU (kõigi jalgade peale).
+    # Kasutaja nõue: kui mitu tehingut korraga sees, võib kogukahjum
+    # kiiresti täituda ja strateegia ei tööta. Ühe jala puhul on see
+    # niikuinii 1, aga lagi jääb kehtima ka siis, kui jalgu juurde lisada.
+    "portfolio_max_open_total": 1,
     "portfolio_interval": "1d",     # testitud päevabaaridel — ära muuda ilma uue backtestita
     "portfolio_legs": [
         {"name": "XAUUSD", "symbol_candidates": ["XAUUSD"],

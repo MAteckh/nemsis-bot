@@ -1026,6 +1026,20 @@ def run_portfolio_leg(leg, now):
         return
     if [p for p in open_pos if not p.get("executed")]:
         return  # üks positsioon korraga jala kohta
+
+    # ── GLOBAALNE POSITSIOONILAGI (12. sept 2026) ─────────────────────
+    # Kasutaja nõue: korraga ainult N tehingut KOKKU. Kui mitu positsiooni
+    # korraga sees, võib kogukahjum kiiresti täituda ja strateegia ei
+    # tööta — iga positsioon riskib eraldi portfolio_max_loss_eur'i, nii
+    # et 3 positsiooni = 3x lagi.
+    # NB: see loeb KÕIKI portfelli jalgu, mitte ainult seda üht.
+    max_total = int(GRID_CONFIG.get("portfolio_max_open_total", 0) or 0)
+    if max_total > 0:
+        koik_lahti = sb_select("signals", "executed=eq.false&regime=eq.portfolio")
+        if len(koik_lahti) >= max_total:
+            add_log(f"⏸ {name}: portfellis juba {len(koik_lahti)} positsiooni "
+                    f"(lagi {max_total}) — uut ei avata")
+            return
     # Backtestis sai iga baar anda MAX ÜHE sisenemise. Live skaneerib aga iga
     # minut, nii et sama päevabaari signaal käivituks ikka ja jälle (ka kohe
     # pärast TP/SL sulgemist). Seepärast: üks sisenemine päevas jala kohta.
@@ -1043,10 +1057,38 @@ def run_portfolio_leg(leg, now):
     if sl_dist <= 0:
         return
 
+    # ── KOVA KAHJUMILAGI (12. sept 2026) ──────────────────────────────
+    # Piira SL-i KAUGUST, et kahjum ei saaks ületada portfolio_max_loss_eur.
+    # Vajalik sellepärast, et get_risk_based_lot tagastab broker'i
+    # miinimum-loti (0.01), kui arvutatud lot on sellest väiksem — ja siis
+    # ei kehti portfolio_risk_pct enam üldse. XAUUSD-l oli päris risk
+    # 2 x ATR = 139.53€ = 68% 205€ kontost, mitte lubatud 1.5%.
+    #
+    # Piirame ENNE loti arvutust — täpselt nagu bot/run_sl_cap.py testis,
+    # kus see andis parema tulemuse kui piiramata SL (+2134.76€ vs
+    # +1672.84€) ja halvima tehingu -45.00€ vs -171.27€.
+    #
+    # SL läheb koos orderiga broker'ile, seega lagi kehtib ka siis, kui
+    # bot on maas — erinevalt bot-poolsest float-stopist.
+    max_loss = float(GRID_CONFIG.get("portfolio_max_loss_eur", 0) or 0)
+    if max_loss > 0:
+        min_lot = 0.01                      # broker'i miinimum
+        max_dist = max_loss / (min_lot * pv)
+        if sl_dist > max_dist:
+            add_log(f"🛡 {name}: SL piiratud {sl_dist:.5f} → {max_dist:.5f} "
+                    f"(max kahjum {max_loss:.0f}€)")
+            sl_dist = max_dist
+
     balance = get_balance()
     lot = gold_logic.get_risk_based_lot(balance, sl_dist, pv,
                                         GRID_CONFIG.get("portfolio_risk_pct", 0.015),
                                         max_lot=GRID_CONFIG.get("risk_lot_max", 0.5))
+    # Kui lot tuli miinimumist suurem, kontrolli lage uuesti — muidu
+    # suurem lot taastaks selle kahjumi, mida just piirasime.
+    if max_loss > 0 and sl_dist * pv * lot > max_loss:
+        lubatud = max_loss / (sl_dist * pv)
+        lot = max(0.01, round(lubatud, 2))
+        add_log(f"🛡 {name}: lot piiratud → {lot} (max kahjum {max_loss:.0f}€)")
     tp = round(price + tp_dist if direction == "buy" else price - tp_dist, 5)
     sl = round(price - sl_dist if direction == "buy" else price + sl_dist, 5)
     res = ct.place_order(direction, sym, lot, tp=tp, sl=sl)
