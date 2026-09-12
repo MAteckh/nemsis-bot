@@ -6,7 +6,12 @@ kirjutab valja, kas paevasisene JP225 strateegia on 200EUR kontol
 uldse teostatav.
 
 Kasutus VPS-il (PowerShell, kaustas C:\\nemsis-bot):
-    python bot\\check_jp225.py
+    python check_jp225.py
+
+VOIB JOOKSUTADA SAMAL AJAL, KUI BOT TOOTAB. Skript ei kauple ega
+muuda midagi, ja ta EI LOGI UUESTI SISSE, kui terminal on juba
+sisse logitud (mt5.login() teises protsessis voiks jooksva boti
+uhenduse segada — seepaerast proovime esmalt lihtsalt kulge haakuda).
 
 Miks see on kriitiline:
 Kogu selle strateegia saatuse otsustab LEPINGU SUURUS ja MIINIMUM-LOT.
@@ -18,24 +23,41 @@ notsionaali, siis on risk ~1.7% ja strateegia on teostatav.
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+# .env laadimine — main_v4.py teeb sama. Ilma selleta on MT5_LOGIN ja
+# MT5_PASSWORD tuhjad ja varu-sisselogimine allpool ebaonnestuks.
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 try:
     import MetaTrader5 as mt5
 except ImportError:
     print("MetaTrader5 teek puudub — see skript töötab AINULT VPS-il (Windows).")
     sys.exit(1)
 
-import mt5_connector as ct
-
 CANDIDATES = ["JP225", "JPN225", "JP225.cash", "Nikkei225", "NIKKEI",
               "JPN225.cash", "J225", "JP225Cash", "JPY225"]
 
-if not ct._connect():
-    print("MT5 ühendus ebaõnnestus:", mt5.last_error())
-    sys.exit(1)
+# 1) Haaki kulge juba tootava terminali kulge — ILMA login'ita.
+acc = None
+if mt5.initialize():
+    acc = mt5.account_info()
 
-acc = mt5.account_info()
+# 2) Ainult kui see ei andnud kontot, logi sisse .env andmetega.
 if acc is None:
-    print("account_info() tagastas None")
+    print("Terminal ei olnud sisse logitud — login .env andmetega...")
+    import mt5_connector as ct
+    if not ct._connect():
+        print("MT5 ühendus ebaõnnestus:", mt5.last_error())
+        print("Kontrolli, et MT5 terminal on lahti ja .env failis on")
+        print("MT5_LOGIN, MT5_PASSWORD ja MT5_SERVER.")
+        sys.exit(1)
+    acc = mt5.account_info()
+
+if acc is None:
+    print("account_info() tagastas None — MT5 terminal ei ole sisse logitud.")
     sys.exit(1)
 
 print("=" * 78)
