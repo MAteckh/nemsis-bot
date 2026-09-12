@@ -152,10 +152,22 @@ if prof is not None:
     print("=" * 78)
 
 print("\nKAUPLEMISAJAD (Jaapani sessioon on 00:00-06:00 UTC):")
-for d in range(7):
-    q = mt5.symbol_info_session_quote(name, d, 0)
-    t = mt5.symbol_info_session_trade(name, d, 0)
-    if t:
-        print(f"   päev {d}: kauplemine {t.open} .. {t.close}")
+# symbol_info_session_quote/-trade ei ole koigis MetaTrader5 teegi
+# versioonides olemas — VPS-il andis see AttributeError'i. Kusi
+# getattr'iga ja utle ausalt, kui teek seda ei paku.
+_sess = getattr(mt5, "symbol_info_session_trade", None)
+if _sess is None:
+    print("   (see MetaTrader5 teegi versioon ei paku sessiooniaegade lugemist —")
+    print("    vaata need vajadusel MT5 terminalist: Market Watch -> Specification)")
+else:
+    paevad = ["esmaspäev", "teisipäev", "kolmapäev", "neljapäev",
+              "reede", "laupäev", "pühapäev"]
+    for d in range(7):
+        try:
+            t = _sess(name, d, 0)
+        except Exception:
+            t = None
+        if t:
+            print(f"   {paevad[d]:12s} {t.open} .. {t.close}")
 
 mt5.shutdown()
