@@ -644,13 +644,44 @@ def sync_mt5_positions():
                 # tehinguajaloost ja logi trades-tabelisse.
                 deal = ct.get_closed_deal_pnl(ticket)
                 sb_upsert("signals", {"id": pos["id"], "executed": True})
+                # Loetav nimi Telegrami jaoks: "pf_SPX" -> "SPX",
+                # "overlay" -> "Ülekiht", "recovered_XAUUSD" -> "XAUUSD".
+                sess = str(pos.get("session") or pos.get("regime") or "positsioon")
+                if sess.startswith("pf_"):
+                    nimi = sess[3:]
+                elif sess.startswith("recovered_"):
+                    nimi = sess[10:]
+                elif sess.startswith("overlay"):
+                    nimi = "Ülekiht"
+                else:
+                    nimi = sess
+                d_ = str(pos.get("direction") or "").upper()
+                # Supabase võib arvu tagastada ka stringina — ära lase
+                # vormindusveal kogu sync-tsüklit katkestada (ülejäänud
+                # sulgemised jääksid siis sellel skannil töötlemata).
+                try:
+                    entry_ = float(pos.get("entry"))
+                except (TypeError, ValueError):
+                    entry_ = None
                 if deal:
                     ok = log_trade_close(pos, deal["pnl"], deal["close_price"],
                                          "sync", deal["close_time"])
                     add_log(f"🔄 Sync: {ticket} suletud, tulemus {deal['pnl']:+.2f}€"
                             f"{'' if ok else ' (trades salvestus ebaõnnestus!)'}")
+                    # Varem oli sulgemisteade Telegramis spekulatiivsete
+                    # plokkide sees (portfell/ülekiht). Need eemaldati, sest
+                    # nende P&L oli teoreetiline ja TP/SL järjekord vale.
+                    # Teade tuleb nüüd siit — PÄRIS numbriga tehinguajaloost.
+                    hoiatus = "" if ok else "\n⚠️ trades-tabelisse ei salvestunud!"
+                    rida = f"{d_} {entry_:g} → {deal['close_price']:g}\n" if entry_ else ""
+                    send_telegram(
+                        f"{'✅' if deal['pnl'] > 0 else '🛑'} <b>{nimi} suletud</b>\n"
+                        f"{rida}{deal['pnl']:+.2f}€  (päris tulemus){hoiatus}")
                 else:
                     add_log(f"🔄 Sync: positsioon {ticket} suletud MT5 poolt → Supabase uuendatud (P&L ei leitud)")
+                    send_telegram(
+                        f"ℹ️ <b>{nimi} suletud</b>\n#{ticket} suleti broker'i poolt.\n"
+                        f"P&L-i ei õnnestunud tehinguajaloost lugeda — kontrolli MT5-st.")
                 closed_found = True
 
         # MT5-s avatud (SÕLTUMATA magic-numbrist — kaasa arvatud käsitsi
@@ -828,24 +859,24 @@ def run_gold_core_overlay(price, high, low, now, df):
         return
 
     # ── ÜLEKIHT: sulgemiste kontroll ──
+    # EEMALDATUD 12. sept 2026 — vaata sync_mt5_positions() docstring'i.
+    # Siin oli varem "spekulatiivne" sulgemistuvastus: kui baari high/low
+    # ületas TP või SL taseme, märgiti positsioon suletuks ja P&L arvutati
+    # VALEMIGA (level - entry) * lot * 100. Kolm viga:
+    #   1. if TP ... elif SL — kui SAMA baar puudutas MÕLEMAT taset, eeldati
+    #      alati VÕITU. Baar ei ütle, kumb tabati esimesena. Päris broker
+    #      võis sulgeda SL-il, samal ajal kui bot kirjutas kasumi.
+    #   2. P&L oli teoreetiline — ei sisaldanud spread'i, slippage'i,
+    #      komisjoni ega swap'i.
+    #   3. See kirjutas executed=True ENNE kui sync jõudis päris tulemuse
+    #      tehinguajaloost tuua — pärast seda ei leidnud sync rida enam üles
+    #      (sync pärib executed=eq.false) ja päris number läks kaotsi.
+    # Order pannakse broker'ile koos TP/SL-iga (ct.place_order(..., tp, sl)),
+    # seega BROKER sulgeb positsiooni ja broker on ainus tõde.
+    # sync_mt5_positions() tuvastab sulgemise get_all_positions() põhjal ja
+    # loeb PÄRIS tulemuse get_closed_deal_pnl()'iga. Ta jookseb igal skannil
+    # ENNE seda funktsiooni (rida ~1444 vs ~1488).
     balance = get_balance()
-    for pos in get_overlay_positions():
-        entry, d = float(pos.get("entry", 0)), pos.get("direction", "buy")
-        tp, sl = pos.get("tp"), pos.get("sl")
-        hit = None
-        if tp is not None and ((high >= float(tp)) if d == "buy" else (low <= float(tp))):
-            hit = ("TP", float(tp))
-        elif sl is not None and ((low <= float(sl)) if d == "buy" else (high >= float(sl))):
-            hit = ("SL", float(sl))
-        if not hit:
-            continue
-        label, level = hit
-        lot = float(pos.get("lot") or 0.01)
-        pnl = (level - entry) * lot * 100 if d == "buy" else (entry - level) * lot * 100
-        sb_upsert("signals", {"id": pos["id"], "executed": True})
-        log_trade_close(pos, pnl, level, f"overlay_{label.lower()}")
-        add_log(f"{'✅' if pnl > 0 else '🛑'} Ülekiht {label}: {d.upper()} {entry:.2f}→{level:.2f}  {pnl:+.2f}€")
-        send_telegram(f"{'✅' if pnl > 0 else '🛑'} <b>Ülekiht {label}</b>\n{d.upper()} {entry:.2f}→{level:.2f}\n{pnl:+.2f}€")
 
     # ── ÜLEKIHT: uus signaal ──
     if now.weekday() >= 5 or gold_logic.is_news_blackout(now):
@@ -942,30 +973,28 @@ def run_portfolio_leg(leg, now):
     price = get_price(sym)
     if price <= 0:
         price = float(df["close"].iloc[-1])
-    high = float(df["high"].iloc[-1])
-    low = float(df["low"].iloc[-1])
-
     session = f"pf_{name}"
     open_pos = sb_select("signals", f"executed=eq.false&session=eq.{session}&order=created_at.asc")
 
     # ── sulgemised ──
-    for pos in open_pos:
-        entry, d = float(pos.get("entry", 0)), pos.get("direction", "buy")
-        tp, sl = pos.get("tp"), pos.get("sl")
-        hit = None
-        if tp is not None and ((high >= float(tp)) if d == "buy" else (low <= float(tp))):
-            hit = ("TP", float(tp))
-        elif sl is not None and ((low <= float(sl)) if d == "buy" else (high >= float(sl))):
-            hit = ("SL", float(sl))
-        if not hit:
-            continue
-        label, level = hit
-        lot = float(pos.get("lot") or 0.01)
-        pnl = (level - entry) * lot * pv if d == "buy" else (entry - level) * lot * pv
-        sb_upsert("signals", {"id": pos["id"], "executed": True})
-        log_trade_close(pos, pnl, level, f"portfolio_{label.lower()}")
-        add_log(f"{'✅' if pnl > 0 else '🛑'} {name} {label}: {d.upper()} {entry:.4f}→{level:.4f}  {pnl:+.2f}€")
-        send_telegram(f"{'✅' if pnl > 0 else '🛑'} <b>{name} {label}</b>\n{d.upper()} {entry:.4f}→{level:.4f}\n{pnl:+.2f}€")
+    # EEMALDATUD 12. sept 2026 — sulgemisi haldab ainult sync_mt5_positions().
+    # Siin oli spekulatiivne tuvastus baari high/low järgi. Portfelli jalad
+    # jooksevad PÄEVABAARIL (portfolio_interval="1d"), mis teeb vea kõige
+    # suuremaks just siin:
+    #   * kui päeva jooksul puudutati nii TP-d kui SL-i, valis "if TP ...
+    #     elif SL" alati TP = VÕIDU. Päevabaar ei ütle, kumb oli enne.
+    #   * high/low on JOOKSVAD päeva ekstreemumid: kui hind puudutas TP-d
+    #     kell 10, jäi high>=tp tõeseks kogu ülejäänud päevaks.
+    #   * P&L arvutati teoreetilisel tasemel — ilma spread'i, slippage'i,
+    #     komisjoni ja swap'ita.
+    #   * executed=True kirjutati enne, kui sync jõudis päris tulemuse tuua,
+    #     mistõttu päris number läks jäädavalt kaotsi.
+    # Order läheb broker'ile koos TP/SL-iga (ct.place_order(..., tp, sl)),
+    # seega broker sulgeb ja broker on ainus tõde. sync_mt5_positions()
+    # jookseb igal skannil ENNE seda funktsiooni ja loeb päris P&L-i
+    # get_closed_deal_pnl()'iga.
+    # (df["high"]/["low"] lugemine eemaldatud koos sellega — neid ei kasuta
+    #  siin enam miski.)
 
     # ── uus signaal ──
     if now.weekday() >= 5 or gold_logic.is_news_blackout(now):
@@ -1169,6 +1198,21 @@ def run_gold_grid(price, high, low, now):
             add_log(f"⏸ Gold grid: {grid_trend}→{effective_trend} suletud, uut ei avata (ADX liiga madal / chop)")
         return
 
+    # ⚠️ TEADAOLEV PUUDUS — ÄRA LÜLITA GRIDI SISSE ENNE PARANDAMIST (12. sept 2026)
+    # Allolev TP-tuvastus kannab sama viga, mis eemaldati portfellist ja
+    # ülekihist:
+    #   1. P&L = abs(tp-entry)*lot*100 on TEOREETILINE — ilma spread'i,
+    #      slippage'i, komisjoni ja swap'ita. Sellepärast ei tohi trades-
+    #      tabeli vanu grid-ridu võtta päris tulemusena.
+    #   2. sb_upsert("bot_state", balance) kirjutab SIMULEERITUD balance'i
+    #      üle päris MT5 balance'i, mille sync ja skannitsükkel sinna panevad.
+    #      Kaks kirjutajat, erinevad numbrid — dashboard näitaks valet.
+    #   3. Baar ei ütle, kas TP tabati enne SL-i.
+    # Grid on praegu VÄLJAS (INSTRUMENTS["XAUUSD"]["enabled"] = False), seega
+    # see kood ei jookse ja ma ei muutnud selle loogikat — grid'i "pending"
+    # vastasorderi loogika sõltub sellest harust ja seda ei saa ilma korraliku
+    # H1-backtestita ümber teha. Kui grid uuesti sisse lülitatakse, tuleb see
+    # kõigepealt sync_mt5_positions()'i peale viia, nagu portfell ja ülekiht.
     open_pos = get_gold_positions()
     for pos in open_pos:
         entry = float(pos.get("entry",0))
