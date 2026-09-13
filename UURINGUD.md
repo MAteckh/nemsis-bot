@@ -173,7 +173,58 @@ Need testid tapsid enamiku kandidaatidest:
 
 ---
 
-## 7. Mis on veel testimata
+## 7. Prop-firma — kas praegune strateegia läbiks?
+
+Testitud `run_prop_xauusd.py`. Strateegia R-ühikutes: **+0,525R** keskmiselt,
+50,8% võite, fikseeritud 2:1, **8,8 tehingut aastas**.
+
+**Ajalimiidiga (180 päeva) EI LÄBI:** 0,0% 0,5–1% riski juures. Põhjus:
+~4 tehingut 180 päeva jooksul, neljast ei saa +10%.
+
+**Ilma ajalimiidita LÄBIB:**
+
+| Risk/tehing | Läbib 1. sammu | Lõhub | Mediaan aeg | Oodatav %/a |
+|---|---|---|---|---|
+| 1,0% | 94,5% | 0,4% | 622 p | 4,6% |
+| **2,0%** | **94,7%** | 4,9% | **249 p** | 9,3% |
+| 3,0% | 87,9% | 12,1% | 166 p | 13,9% |
+
+2% riskiga läbi mõlema sammu: **90,7%, ~332 päeva.**
+Rahastatud $25 000: 9,3%/a → kaupleja 85% osa = **$164/kuus**.
+
+Miinimum-loti probleem kaob: 205€ kontol on üks positsioon 68% riski,
+$25 000 kontol **0,56%**.
+
+### ⚠️ Kaks asja, mis tapaksid katse
+
+**1. Boti limiidid on prop-firma omadest laiemad**
+```
+bot        : -10% PÄEVAS, -15% nädalas
+prop-firma :  -5% päevas, -10% KOKKU
+```
+Bot rikuks reegli enne, kui tema enda kaitse käivituks. Vaja muuta
+päevalimiit → −4%, kogulimiit → −8%. **Veel tegemata.**
+
+**2. Tegevusetuse reegel (kriitilisem)**
+```
+keskmine vahe tehingute vahel : 36 päeva
+mediaan                       : 20 päeva
+PIKIM VAHE                    : 144 päeva
+
+vahesid üle 30 päeva: 26 / 58 = 45%
+```
+Paljudel firmadel suletakse konto 30-päevase tegevusetuse järel.
+Selle strateegiaga juhtuks see **45% pausidest**.
+
+**Nõuded firmale (kõik peavad täituma):**
+1. **Ajalimiiti ei tohi olla**
+2. **Tegevusetuse reegel puudub või ≥150 päeva**
+3. EA/bot lubatud
+4. XAUUSD lubatud
+
+---
+
+## 8. Mis on veel testimata
 
 - **FX päevasisesed andmed** Supabase `load_yahoo_bars()` kaudu. FX
   mikro-lott (0,01 = ~860€) on ainus asi, mida 205€ kontol õiges suuruses
