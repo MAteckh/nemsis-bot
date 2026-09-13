@@ -23,3 +23,7 @@ bot/small_tp_tulemus.txt
 bot/candles_tulemus.txt
 bot/crosssection_tulemus.txt
 bot/combine_tulemus.txt
+bot/signal_hunt_tulemus.txt
+bot/hunt_null_tulemus.txt
+bot/walkforward_tulemus.txt
+bot/data/labijad.csv
