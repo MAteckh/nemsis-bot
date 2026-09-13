@@ -77,25 +77,52 @@ Enne kui ütled, et muudatus on valmis:
 - €200 konto on kulla jaoks alakapitaliseeritud: 0.01 lot + $45 stopp = ~22%
   riski tehingu kohta. Sama strateegia €5000 kontol: drawdown -25% vs -114%.
 
-## VÄLJUNDI VORM — KOHUSTUSLIK
+## VÄLJUNDI VORM — KOHUSTUSLIK, ILMA ERANDITETA
 
-Kasutaja nõue: **anna ALATI kogu info nii, et seda saab copy/paste teha.**
+Kasutaja nõue, korratud mitu korda: **anna ALATI kogu vastus nii, et seda
+saab ühe liigutusega copy/paste teha.**
 
-See tähendab iga sisulise vastuse puhul:
+### Reegel
 
-1. **Kogu tulemus ühes koodiplokis** (```), mitte laiali markdown-tabelites.
-   Markdown-tabelid kaovad kopeerimisel ära; ASCII-tabelid mitte.
-2. **Kõik numbrid sees** — mitte "vt faili", vaid päris arvud kohapeal.
-3. **Lisaks salvesta fail** repo juurde (nt `KOKKUVOTE_VX.md`) ja saada
-   see kasutajale `SendUserFile`-ga. Fail ja chat-plokk MÕLEMAD.
-4. **ASCII-tabelid**, mitte markdown-püstkriipsud, sest need säilivad
-   igal pool (Telegram, Notepad, e-kiri).
-5. Ära jäta olulist ainult jutu sisse — see peab olema plokis.
+**KOGU vastus on ÜHES koodiplokis.** Mitte osa plokis ja osa jutuna.
+Mitte sissejuhatus väljaspool ja tabel sees. KOGU vastus, algusest lõpuni,
+ühe ``` ploki sees.
 
-Vorm, mis töötab:
+Ainus lubatud asi väljaspool plokki: üks rida faililinki/URL-i, kui fail
+saadetakse.
+
+### Miks
+
+Markdown-tabelid, rasvane kiri ja pealkirjad **kaovad kopeerimisel ära**.
+Kasutaja viib teksti Telegrami, Notepadi, e-kirja. Seal peab see välja
+nägema täpselt samamoodi.
+
+### Nõuded ploki sees
+
+1. **ASCII-tabelid**, mitte markdown-püstkriipsud.
+2. **Kõik numbrid kohapeal** — mitte "vt faili", vaid päris arvud.
+3. **Kogu järeldus sees** — ära jäta midagi olulist ainult jutu sisse.
+4. **Ilma markdown-süntaksita**: ei `**rasvane**`, ei `#` pealkirju,
+   ei `|` tabeleid. Ainult tavaline tekst ja ASCII-jooned.
+5. **Lisaks salvesta fail** repo juurde (nt `KOKKUVOTE_X.md`) ja saada
+   `SendUserFile`-ga. Fail ja plokk MÕLEMAD, mitte kumbki eraldi.
+
+### Vorm, mis töötab
+
 ```
-===== PEALKIRI =====
- veerg1      veerg2     veerg3
- ------      ------     ------
- väärtus     väärtus    väärtus
+===============================================================
+PEALKIRI
+===============================================================
+  alapealkiri
+
+  veerg1      veerg2      veerg3
+  ------      ------      ------
+  väärtus     väärtus     väärtus
+
+  JÄRELDUS: tekst siin, mitte ploki taga.
 ```
+
+### Kontroll enne saatmist
+
+Küsi endalt: kui kasutaja vajutab ploki juures "copy" ja kleebib selle
+Notepadi — kas ta saab KOGU vastuse? Kui ei, siis vorm on vale.
