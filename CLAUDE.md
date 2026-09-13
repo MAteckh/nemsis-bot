@@ -76,3 +76,26 @@ Enne kui ütled, et muudatus on valmis:
 - `risk_based_lot` on üksik kõige mõjusam parandus (+61€ → +638€).
 - €200 konto on kulla jaoks alakapitaliseeritud: 0.01 lot + $45 stopp = ~22%
   riski tehingu kohta. Sama strateegia €5000 kontol: drawdown -25% vs -114%.
+
+## VÄLJUNDI VORM — KOHUSTUSLIK
+
+Kasutaja nõue: **anna ALATI kogu info nii, et seda saab copy/paste teha.**
+
+See tähendab iga sisulise vastuse puhul:
+
+1. **Kogu tulemus ühes koodiplokis** (```), mitte laiali markdown-tabelites.
+   Markdown-tabelid kaovad kopeerimisel ära; ASCII-tabelid mitte.
+2. **Kõik numbrid sees** — mitte "vt faili", vaid päris arvud kohapeal.
+3. **Lisaks salvesta fail** repo juurde (nt `KOKKUVOTE_VX.md`) ja saada
+   see kasutajale `SendUserFile`-ga. Fail ja chat-plokk MÕLEMAD.
+4. **ASCII-tabelid**, mitte markdown-püstkriipsud, sest need säilivad
+   igal pool (Telegram, Notepad, e-kiri).
+5. Ära jäta olulist ainult jutu sisse — see peab olema plokis.
+
+Vorm, mis töötab:
+```
+===== PEALKIRI =====
+ veerg1      veerg2     veerg3
+ ------      ------     ------
+ väärtus     väärtus    väärtus
+```
