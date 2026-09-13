@@ -19,3 +19,5 @@ bot/m5_intraday_tulemus.txt
 bot/quit_job_tulemus.txt
 bot/legs_exact_tulemus.txt
 bot/prop_xauusd_tulemus.txt
+bot/small_tp_tulemus.txt
+bot/candles_tulemus.txt
