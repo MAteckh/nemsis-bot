@@ -222,6 +222,38 @@ Selle strateegiaga juhtuks see **45% pausidest**.
 3. EA/bot lubatud
 4. XAUUSD lubatud
 
+### Turu-uuring (13. sept 2026, veebiotsing)
+
+| Leid | Allikas |
+|---|---|
+| Ajalimiidita firmasid **on olemas** (FundingPips, FundedFast, Alpha Capital) | aggregaatorid |
+| **30-päevane tegevusetuse reegel on peaaegu universaalne** — FundingPips lõpetab konto 30 päeva järel, FundedFast sulgeb | FundingPips help center (primaarne) |
+| Equity Edge — ainus ilma tegevusetuse reeglita, **AGA EA-d on otseselt keelatud** | equityedge.io trading-rules |
+| FundingPips lubab EA-sid *"trade management ja risk management"* jaoks; keelab *"pure execution speed or arbitrage"* | aggregaator — **vajab kirjalikku kinnitust** |
+
+**Järeldus:** ajalimiit ei ole probleem. **Tegevusetuse reegel on.**
+
+### Lahendus: täitetehing
+
+Reegel nõuab ühte avatud+suletud tehingut iga 30 päeva jooksul. Seda saab
+täita miinimum-positsiooniga, mis avatakse ja suletakse kohe.
+
+```
+täitetehinguid vaja (25-päevase varuga) : 10,3 tükki aastas
+kulu ühe kohta (3bp spread)             : 2,27€
+kulu aastas                             : 23,36€
+$25 000 kontol                          : 0,109% aastas
+
+oodatav tootlus enne : 9,30%/a
+pärast               : 9,19%/a
+```
+
+**Kulu on praktiliselt olematu. Takistus on lahendatav.**
+
+⚠️ Kontrolli firmalt **kirjalikult** enne maksmist: (a) kas täitetehing
+loeb aktiivsuseks, (b) kas mahunõue on, (c) kas donchian-breakout EA
+mahub nende "trade management" määratluse alla.
+
 ---
 
 ## 8. Mis on veel testimata
