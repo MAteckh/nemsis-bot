@@ -18,10 +18,10 @@ SIGNAALID = ["A_CONT", "A_REV", "B_CONT", "B_REV", "C_CONT", "C_REV"]
 
 
 # ------------------------------------------------------------ ehitusplokid -
-def ehita_alus(usd_allikas="implitseeritud"):
+def ehita_alus(usd_allikas="implitseeritud", sufiks="_d", puhasta=False):
     d = E.lae_cot()
     N = E.net_pct_tabel(d, usd_allikas)
-    V = E.usd_vaartused()
+    V = E.usd_vaartused(sufiks, puhasta)
     sis = E.sisenemispaevad(N.index, V.index)
     P = N.apply(E.rull_pertsentiil).reindex(sis.index)
     Nw = N.reindex(sis.index)

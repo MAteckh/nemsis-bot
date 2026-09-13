@@ -102,8 +102,14 @@ VALID_LOPP = pd.Timestamp("2023-08-31")
 
 
 # ---------------------------------------------------------------- andmed ---
-def lae_hind(sym):
-    p = os.path.join(DATA, f"{sym}_d.csv")
+def lae_hind(sym, sufiks="_d"):
+    """
+    Paevane sulgemishind. sufiks="_d" on 2016-2026 seeria (algne COT-toos),
+    sufiks="_d25" on Yahoo 25-aastane seeria (COT A1 pikendustest).
+    MOLEMAD tulevad SAMAST allikast (Yahoo `=X` paevane close, sama
+    load_yahoo_bars funktsioon) — andmeallikat EI vahetata perioodide vahel.
+    """
+    p = os.path.join(DATA, f"{sym}{sufiks}.csv")
     if not os.path.exists(p):
         return None
     d = pd.read_csv(p, parse_dates=["Date"]).set_index("Date").sort_index()
@@ -112,13 +118,46 @@ def lae_hind(sym):
     return pd.to_numeric(d["close"], errors="coerce").dropna()
 
 
-def usd_vaartused():
+def puhasta_spike(s, lavi=0.05, tagasi=0.30):
+    """
+    Eemaldab OILMSED andmeveavad: uhe paeva hupe, mis JARGMISEL paeval
+    peaaegu taielikult tagasi poordub.
+
+    MIKS SEE ON VAJALIK: Yahoo `=X` seeria sisaldab 2008. aastal
+    umberpoorduvaid valehindu, nt EURUSD 2008-12-08 sulgemine 1.49180
+    (+15.96%) ja jargmisel paeval -14.33% tagasi; sama paev USDJPY
+    109.24 (+16.29%) ja -16.85% tagasi. Vaartus 1.55710 kordub EURUSD-s
+    mitmel paeval 2008. aastal — kinni jaanud kvoot.
+
+    Reegel on MEHAANILINE ja SUMMEETRILINE, mitte tulemustepohine:
+      lipp, kui |r_t| >= 5% JA |r_t + r_(t+1)| <= 30% * |r_t|
+    Paris hupped (SNB porand 2011-09-06 +9.2%, selle kaotamine
+    2015-01-16 -17.6%, Brexit 2016-06-26 -7.9%) EI poordu tagasi ja
+    jaavad puutumata. Lipuga paeva sulgemine asendatakse naaberpaevade
+    geomeetrilise keskmisega.
+
+    Vaikimisi EI kasutata (raporteerime nii puhastatud kui toorest).
+    """
+    x = s.astype(float).copy()
+    r = np.log(x).diff()
+    r2 = r.shift(-1)
+    lipp = (r.abs() >= lavi) & ((r + r2).abs() <= tagasi * r.abs())
+    idx = np.where(lipp.fillna(False).values)[0]
+    for i in idx:
+        if 0 < i < len(x) - 1:
+            x.iloc[i] = math.sqrt(float(x.iloc[i - 1]) * float(x.iloc[i + 1]))
+    return x, int(len(idx))
+
+
+def usd_vaartused(sufiks="_d", puhasta=False):
     """Series-dict: 1 uhik valuutat USD-des. USD = 1.0."""
     v = {"USD": None}
     for c, (sym, inv) in USD_LEG.items():
-        s = lae_hind(sym)
+        s = lae_hind(sym, sufiks)
         if s is None:
             continue
+        if puhasta:
+            s, _ = puhasta_spike(s)
         v[c] = (1.0 / s) if inv else s
     ix = None
     for c, s in v.items():

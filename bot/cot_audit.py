@@ -27,8 +27,8 @@ def kontroll(nimi, tingimus, info=""):
 # ---------------------------------------------------------------- A1 ------
 d = E.lae_cot()
 N = E.net_pct_tabel(d)
-kontroll("A1 COT ridu", len(d) == 10565, f"{len(d)} rida, {d['cur'].nunique()} valuutat")
-kontroll("A1 vahemik", str(d["date"].min().date()) == "2004-01-06",
+kontroll("A1 COT ridu", len(d) == 12160, f"{len(d)} rida, {d['cur'].nunique()} valuutat")
+kontroll("A1 vahemik", str(d["date"].min().date()) == "2000-01-04",
          f"{d['date'].min().date()} .. {d['date'].max().date()}")
 kontroll("A1 net_pct vahemikus [-1,1]",
          bool(d["net_pct"].abs().max() <= 1.0), f"max|net_pct|={d['net_pct'].abs().max():.3f}")
