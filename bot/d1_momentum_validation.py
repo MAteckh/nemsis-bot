@@ -353,16 +353,34 @@ def walk_forward(T, train_a=5, test_a=2, algus=2006, lopp=2026):
 
 # -------------------------------------------------- 8. MONTE CARLO -------
 def monte_carlo(T, katseid=10000, seeme=20260915):
+    """
+    KAKS MEETODIT, sest uksi jarjekorra permutatsioon EI SAA vastata
+    kusimusele "P(lopptulemus < 0)":
+
+    (a) JARJEKORRA PERMUTATSIOON (nagu kusitud). Fikseeritud
+        protsendiriski juures on lopp-equity prod(1 + risk*R_i) ja
+        KORRUTAMINE ON KOMMUTATIIVNE — lopptulemus on IGAS permutatsioonis
+        TAPSELT SAMA. Varieerub ainult drawdown. See ei ole viga, vaid
+        matemaatiline fakt, ja seetottu on "5%/1% lopptulemus" ja
+        "P(<0)" selle meetodi puhul sisutud.
+    (b) BOOTSTRAP TAGASIPANEKUGA: n tehingut tommatakse tagasipanekuga
+        tegelikust jaotusest. See annab PARIS lopptulemuse jaotuse.
+    """
     rs = np.random.RandomState(seeme)
     x = T["neto_r"].values
     n = len(x)
-    lopp, dd = np.empty(katseid), np.empty(katseid)
+    read = {"perm_lopp_pct": np.empty(katseid), "perm_maxdd_pct": np.empty(katseid),
+            "boot_lopp_pct": np.empty(katseid), "boot_maxdd_pct": np.empty(katseid)}
     for i in range(katseid):
         y = x[rs.permutation(n)]
         eq = np.cumprod(1 + H.RISK * y)
-        lopp[i] = 100.0 * (eq[-1] - 1)
-        dd[i] = 100.0 * float((eq / np.maximum.accumulate(eq) - 1).min())
-    return pd.DataFrame({"lopptulemus_pct": lopp, "maxdd_pct": dd})
+        read["perm_lopp_pct"][i] = 100.0 * (eq[-1] - 1)
+        read["perm_maxdd_pct"][i] = 100.0 * float((eq / np.maximum.accumulate(eq) - 1).min())
+        z = x[rs.randint(0, n, n)]
+        eqb = np.cumprod(1 + H.RISK * z)
+        read["boot_lopp_pct"][i] = 100.0 * (eqb[-1] - 1)
+        read["boot_maxdd_pct"][i] = 100.0 * float((eqb / np.maximum.accumulate(eqb) - 1).min())
+    return pd.DataFrame(read)
 
 
 # =========================================================== MAIN =========
@@ -476,15 +494,23 @@ if __name__ == "__main__":
     mc_n = 1000 if kiire else 10000
     MC = monte_carlo(T, katseid=mc_n)
     MC.to_csv(os.path.join(JUUR, "D1_MOMENTUM_MONTE_CARLO.csv"), index=False)
-    L, DD = MC["lopptulemus_pct"], MC["maxdd_pct"]
     print(f"  simulatsioone {len(MC)}, risk {100*H.RISK:.0f}% tehingu kohta, "
           f"{m0['n']} tehingut, {aastaid(T):.1f} aastat")
-    print(f"  lopptulemus  mediaan {L.median():+.1f}%   "
-          f"5% {L.quantile(0.05):+.1f}%   1% {L.quantile(0.01):+.1f}%")
-    print(f"  maxDD        mediaan {DD.median():.1f}%   "
-          f"95% kvantiil {DD.quantile(0.05):.1f}%")
-    print(f"  P(lopptulemus < 0)  = {100*float((L<0).mean()):.1f}%")
-    print(f"  P(maxDD > 20%)      = {100*float((DD<-20).mean()):.1f}%")
+    for eesliide, silt in (("perm", "(a) JARJEKORRA PERMUTATSIOON"),
+                           ("boot", "(b) BOOTSTRAP TAGASIPANEKUGA")):
+        L = MC[f"{eesliide}_lopp_pct"]
+        DD = MC[f"{eesliide}_maxdd_pct"]
+        print(f"  {silt}")
+        print(f"     lopptulemus  mediaan {L.median():+.1f}%   "
+              f"5% {L.quantile(0.05):+.1f}%   1% {L.quantile(0.01):+.1f}%")
+        print(f"     maxDD        mediaan {DD.median():.1f}%   "
+              f"95% kvantiil {DD.quantile(0.05):.1f}%")
+        print(f"     P(lopptulemus < 0)  = {100*float((L<0).mean()):.1f}%")
+        print(f"     P(maxDD > 20%)      = {100*float((DD<-20).mean()):.1f}%")
+        if eesliide == "perm":
+            print(f"     NB: lopptulemuse hajuvus on {L.std(ddof=1):.2e} — "
+                  f"korrutamine on kommutatiivne, seega lopptulemus on "
+                  f"permutatsiooni suhtes MUUTUMATU. Ainult DD varieerub.")
 
     print("\n=== 9. MITME TESTIMISE ARVESTUS ===")
     kk = PR[PR["piisav"]]
