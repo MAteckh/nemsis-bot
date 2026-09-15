@@ -285,12 +285,18 @@ def pais_moot(laius=22):
 
 # =========================================================== MAIN =========
 if __name__ == "__main__":
-    KATSEID = 200 if "--kiire" in sys.argv else 1000
+    # Kaheastmeline katseplaan: baseline'i jaotus noab >= 1000 katset
+    # (nouetes punkt 15), aga variantide PAARITUD vordluseks piisab
+    # vahemast — ja need on samad esimesed katsed, seega nested ja paaritud.
+    KATSEID_BASE = 200 if "--kiire" in sys.argv else 1000
+    KATSEID = 50 if "--kiire" in sys.argv else 250
     print("=== ETTEVALMISTUS ===")
     P = valmista()
     print(f"  paare {len(P)}")
-    draws = juhuslikud_sisenemised(P, KATSEID, seeme=SEEME)
-    print(f"  juhuslikke katseid {len(draws)}, seeme {SEEME}")
+    draws_base = juhuslikud_sisenemised(P, KATSEID_BASE, seeme=SEEME)
+    draws = draws_base[:KATSEID]
+    print(f"  juhuslikke katseid: baseline {len(draws_base)}, "
+          f"variandid {len(draws)} (nested, paaritud), seeme {SEEME}")
 
     MOM = momentum_tehingud(P)
     m_mom = moodikud(MOM["neto_r"], aastaid(MOM))
@@ -298,17 +304,17 @@ if __name__ == "__main__":
           f"(Validation v1: n=2483, +0.0294)")
 
     print("\n=== 4. BASELINE KONTROLL ===")
-    n0, b0, per0, T0 = joosta_variant(P, draws, kogu_tehingud=True)
+    n0, b0, per0, T0 = joosta_variant(P, draws_base, kogu_tehingud=True)
     m0 = moodikud(n0)
     print(f"  random entry + SL 1.5ATR / TP 2R / hold 20:")
     print(f"    neto {m0['neto']:+.4f} R  bruto {float(b0.mean()):+.4f} R  "
           f"kulu {float(b0.mean()-n0.mean()):.4f} R")
-    print(f"    n={m0['n']} ({KATSEID} katset), wr {m0['wr']:.1f}%, PF {m0['pf']:.2f}")
+    print(f"    n={m0['n']} ({KATSEID_BASE} katset), wr {m0['wr']:.1f}%, PF {m0['pf']:.2f}")
     print(f"    katsete keskmiste sd {per0.std(ddof=1):.4f}, "
           f"5% {np.quantile(per0,0.05):+.4f}, 95% {np.quantile(per0,0.95):+.4f}")
     print(f"  Validation v1 andis +0.0126 R (1000 katset, oma seemnejadaga).")
     print(f"  Erinevus {m0['neto']-0.0126:+.4f} R on katsete keskmiste "
-          f"standardvea ({per0.std(ddof=1)/math.sqrt(KATSEID):.4f}) piires => KLAPIB.")
+          f"standardvea ({per0.std(ddof=1)/math.sqrt(KATSEID_BASE):.4f}) piires => KLAPIB.")
 
     read_all = []
 
@@ -405,8 +411,8 @@ if __name__ == "__main__":
     LS = []
     for silt, ainult in (("LONG + SHORT", None), ("ainult LONG", 1),
                          ("ainult SHORT", -1)):
-        dr = (draws if ainult is None
-              else juhuslikud_sisenemised(P, KATSEID, seeme=SEEME, ainult=ainult))
+        dr = (draws_base if ainult is None
+              else juhuslikud_sisenemised(P, KATSEID_BASE, seeme=SEEME, ainult=ainult))
         nt, br, per, _ = joosta_variant(P, dr)
         m = moodikud(nt)
         m.update(test="SUUND", suund=silt, bruto=float(br.mean()))
@@ -478,13 +484,39 @@ if __name__ == "__main__":
                             ("spread +50% & slip 2x", 1.50, H.SLIP_BP * 2),
                             ("spread +100%", 2.0, H.SLIP_BP),
                             ("kulu = 0", 0.0, 0.0)):
-        nt, br, per, _ = joosta_variant(P, draws, kulu_kordaja=km, slip=sl_bp)
+        nt, br, per, _ = joosta_variant(P, draws_base, kulu_kordaja=km, slip=sl_bp)
         m = moodikud(nt)
         m.update(variant=silt, bruto=float(br.mean()),
                  kulu=float(br.mean() - nt.mean()))
         KS.append(m)
         print(rida_moot(silt, m, 24, f"  kulu {m['kulu']:.4f}"))
     salvesta("EXIT_COST_STRESS.csv", KS)
+
+    # ---------------- 14b. KORREKTNE DRAWDOWN ----------------------------
+    # Koondatud 1000 katse tehingujada equity EI OLE tolgendatav (see on
+    # 1000 soltumatut maailma jarjestikku liidetud). Oige DD arvutatakse
+    # IGA KATSE SEES eraldi.
+    print("\n=== 14b. DRAWDOWN KATSETE KAUPA (baseline exit) ===")
+    dd_katse = []
+    for draw in draws_base[:200]:
+        kn = []
+        for p_, sg in draw.items():
+            nt, _, si = sim(P[p_], sg)
+            if len(nt):
+                kn.append(pd.DataFrame(dict(aeg=P[p_]["idx"][si], r=nt)))
+        if not kn:
+            continue
+        x = pd.concat(kn).sort_values("aeg")["r"].values
+        eq = np.cumprod(1 + H.RISK * x)
+        dd_katse.append(100.0 * float((eq / np.maximum.accumulate(eq) - 1).min()))
+    dd_katse = np.array(dd_katse)
+    print(f"  200 katset, iga katse sees kronoloogiliselt, risk 1%/tehing:")
+    print(f"    maxDD mediaan {np.median(dd_katse):.1f}%   "
+          f"5% kvantiil {np.quantile(dd_katse, 0.05):.1f}%   "
+          f"halvim {dd_katse.min():.1f}%")
+    print(f"    P(maxDD > 20%) = {100*float((dd_katse < -20).mean()):.1f}%")
+    print("  NB: ulejaanud tabelites naidatud maxDD ~ -100% tuleneb 1000 katse")
+    print("      JARJESTIKKU liitmisest ja EI OLE tolgendatav.")
 
     # ---------------- 15. JUHUSLIKKUSE JAOTUS ----------------------------
     print("\n=== 15. RANDOM SEED JAOTUS (katsete keskmised) ===")
@@ -496,7 +528,7 @@ if __name__ == "__main__":
                 ("TP 1R", dict(tp=1.0)), ("TP 4R", dict(tp=4.0)),
                 ("hold 5", dict(hold=5)), ("hold 60", dict(hold=60))]
     for silt, kw in jaotused:
-        nt, br, per, _ = joosta_variant(P, draws, **kw)
+        nt, br, per, _ = joosta_variant(P, draws_base, **kw)
         RB.append(dict(variant=silt, katseid=len(per), keskm=float(per.mean()),
                        mediaan=float(np.median(per)), sd=float(per.std(ddof=1)),
                        q05=float(np.quantile(per, 0.05)),
@@ -549,8 +581,8 @@ if __name__ == "__main__":
           f"SLxTP {len(Dg)}, HOLDxTP {len(Eg)})")
     print(f"  + suund 3, paare 15, gruppe {len(GRUPID)}, perioode {len(PERIOODID)}, "
           f"rezhiime {len(RZ)}, kuluvariante {len(KS)}")
-    print(f"  juhuslikke katseid iga variandi kohta: {KATSEID} "
-          f"(SAMAD sisenemised => paaritud vordlus)")
+    print(f"  juhuslikke katseid: baseline/kulud/suund/jaotus {KATSEID_BASE}, "
+          f"variandigridid {KATSEID} (nested, SAMAD sisenemised => paaritud)")
     print(f"  BH q=0.05 ule {len(koik)} valjumisvariandi: labis {len(labi)}, "
           f"NEIST POSITIIVSEID {poslabi}")
     print(f"  positiivseid variante: "
