@@ -1,0 +1,9 @@
+valuuta,paar,n_toores,n,bruto_bp,med_bp,wr,v_bp,k_bp,pf,sd_bp,t,p,kulu_bp,lib_bp,neto_bp
+USD,EURUSD,1,,,,,,,,,,,,,
+EUR,EURUSD,5,5.0,-0.4644268397484928,0.0,0.0,0.0,-0.4644268397484928,0.0,0.635942641102716,-1.632993161855452,0.10247043485974938,2.0,0.0,-2.464426839748493
+GBP,GBPUSD,0,,,,,,,,,,,,,
+JPY,USDJPY,0,,,,,,,,,,,,,
+CHF,USDCHF,2,,,,,,,,,,,,,
+CAD,USDCAD,1,,,,,,,,,,,,,
+AUD,AUDUSD,1,,,,,,,,,,,,,
+NZD,NZDUSD,0,,,,,,,,,,,,,
