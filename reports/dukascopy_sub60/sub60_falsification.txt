@@ -1,0 +1,76 @@
+============================================================================================================
+SUB-60 FALSIFIKATSIOON — katse primaartulemus umber lukata
+============================================================================================================
+  DIAGNOSTIKA. Primaartulemust EI MUUDETA, siit ei valita midagi.
+
+P1  PLATSEEBO ENNE TEADET (sama suund, sama taitmine, hoid 30 s)
+  sisenemine                n   keskm pip   mediaan   >0 osa       t        p
+  T-300 s (platseebo)      30      -0.520    -0.400    33.3%   -2.54   0.0168
+  T-120 s (platseebo)      30      -0.507    -0.500    30.0%   -3.61   0.0011
+  T-60 s  (platseebo)      30      -0.580    -0.550    13.3%   -4.44   0.0001
+  T+0 s   (PRIMAARNE)      30      11.143     4.050    90.0%    3.21   0.0032
+
+P2  KLASTRID — 30 sundmust, aga mitu soltumatut hinnarada?
+  sundmusi: 30   unikaalseid (aeg, paar): 21
+    2026-07-14 12:30:00  EURUSD: 3 sundmust, suunad [np.int64(1)], P/L [np.float64(44.3)]
+    2026-07-24 06:00:00  GBPUSD: 2 sundmust, suunad [np.int64(1)], P/L [np.float64(0.6)]
+    2026-07-30 09:00:00  EURUSD: 3 sundmust, suunad [np.int64(-1), np.int64(1)], P/L [np.float64(-1.6), np.float64(0.8)]
+    2026-08-07 12:30:00  EURUSD: 2 sundmust, suunad [np.int64(-1), np.int64(1)], P/L [np.float64(-30.7), np.float64(28.8)]
+    2026-09-01 09:00:00  EURUSD: 2 sundmust, suunad [np.int64(-1)], P/L [np.float64(0.4)]
+    2026-09-03 06:30:00  USDCHF: 2 sundmust, suunad [np.int64(-1)], P/L [np.float64(6.7)]
+    2026-09-04 09:00:00  EURUSD: 2 sundmust, suunad [np.int64(-1)], P/L [np.float64(0.1)]
+  KLASTRITASE (keskmine klastri sees), aus N:
+    n=21  keskm +11.374 pip  mediaan +5.900  >0 90.5%  t +3.08  p 0.0059
+
+P3  KESKHINNA LIIKUMINE ENNE TEADET (signaalisuunas)
+  aken                      n   keskm pip   mediaan       t        p
+  T-300s -> T              30      -0.030    -0.800   -0.07   0.9457
+  T-120s -> T              30      -0.327    -0.050   -1.18   0.2460
+  T-60s -> T               30      -0.073    -0.150   -0.37   0.7155
+  T-30s -> T               30      -0.078     0.000   -0.45   0.6542
+  T-10s -> T               30       0.172     0.100    1.37   0.1802
+
+P4  SISENEMISTICKI SPREAD vs paeva mediaanspread
+  sisenemisspread / paeva mediaan: mediaan 1.66x  p90 3.40x  max 5.33x
+  mitmel sundmusel on sisenemisspread >2x paeva mediaanist: 12 / 30
+    lai spread (>2x)     n=12  keskm  +21.825 pip  mediaan +28.350
+    normaalne (<=2x)     n=18  keskm   +4.022 pip  mediaan  +0.800
+
+P5  JAOTUS — kas tulemuse veab paar vaatlust?
+  koik            n=30  keskm  +11.143  kokku   +334.30
+  ilma top-1      n=29  keskm   +9.407  kokku   +272.80
+  ilma top-2      n=28  keskm   +8.161  kokku   +228.50
+  ilma top-3      n=27  keskm   +6.822  kokku   +184.20
+  ilma top-5      n=25  keskm   +4.364  kokku   +109.10
+  suurimad: [np.float64(61.5), np.float64(44.3), np.float64(44.3), np.float64(44.3), np.float64(30.8), np.float64(28.8)]
+  vaikseimad: [np.float64(0.1), np.float64(-1.6), np.float64(-1.6), np.float64(-30.7)]
+
+P6  UHEAEGSED TEATED
+  ajatempleid: 19   neist mitme teatega: 8
+  suurim uheaegsete teadete arv: 3
+
+  MARKUS: cal_engine.py dokumenteerib, et allikas EI UTLE, kas
+  'actual' on ESIALGNE trukk voi hiljem REVIDEERITUD vaartus.
+  Kui see on revideeritud, siis suund sisaldab infot, mida
+  teate hetkel ei olnud. Seda EI SAA selle andmeallikaga valistada.
+
+P7  MILLAL SPREAD NORMALISEERUB (diagnostika, mitte strateegia)
+  aeg esimesest tickist kuni spread <= 1.5x paeva mediaan:
+    mediaan 0.259 s   p90 1.827 s   max 4.341 s
+  sisenemine KOHE (esimene tick)        n=30  keskm  +11.143 pip  mediaan  +4.050  >0 90.0%  t +3.21
+  sisenemine kui spread normaliseerub   n=30  keskm   +9.017 pip  mediaan  +0.950  >0 83.3%  t +3.03
+
+  Sundmused, kus sisenemisspread oli >2x paeva mediaanist:
+  aeg                  paar      sp kohe  sp med  ootus s  P/L kohe  P/L ootel
+  2026-07-14 12:30:00  EURUSD       0.90    0.30    0.447     44.30      44.90
+  2026-07-14 12:30:00  EURUSD       0.90    0.30    0.447     44.30      44.90
+  2026-07-14 12:30:00  EURUSD       0.90    0.30    0.447     44.30      44.90
+  2026-07-30 12:30:00  EURUSD       1.20    0.30    4.341      2.20      -0.20
+  2026-08-07 12:30:00  EURUSD       1.60    0.30    1.329    -30.70     -21.10
+  2026-08-07 12:30:00  EURUSD       1.60    0.30    1.329     28.80      20.20
+  2026-08-07 12:30:00  USDCAD       3.00    1.20    1.261     30.80      24.60
+  2026-08-14 12:30:00  EURUSD       0.80    0.30    0.211      7.70       7.00
+  2026-09-01 09:00:00  EURUSD       0.70    0.30    3.061      0.40       0.40
+  2026-09-01 09:00:00  EURUSD       0.70    0.30    3.061      0.40       0.40
+  2026-09-04 12:30:00  EURUSD       1.00    0.30    1.249     27.90       4.40
+  2026-09-04 12:30:00  USDCAD       3.20    1.10    1.690     61.50      42.10
