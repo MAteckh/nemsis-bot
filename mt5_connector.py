@@ -183,10 +183,21 @@ def place_order(direction, symbol_name, lot, tp=None, sl=None):
                 sl_val = round(price + min_dist, 2)
         request["sl"] = sl_val
 
-    result = mt5.order_send(request)
+    # PHASE 1 (17.09.2026): order_send'i tulemus jaguneb KAHEKS, mitte uheks.
+    # "unknown" = me EI TEA, kas broker sai orderi katte (None-vastus,
+    # timeout, erind). Sellisel juhul EI TOHI kutsuja uut orderit saata
+    # enne, kui brokeri seis on uuesti kokku loetud. Order'i parameetreid
+    # (hind, lot, SL, TP, deviation, filling) see EI muuda.
+    try:
+        result = mt5.order_send(request)
+    except Exception as e:
+        logger.error(f"order_send erind: {e}")
+        return {"error": f"order_send erind: {e}", "unknown": True}
     if result is None:
-        return {"error": f"order_send tagastas None: {mt5.last_error()}"}
+        return {"error": f"order_send tagastas None: {mt5.last_error()}",
+                "unknown": True}
     if result.retcode != mt5.TRADE_RETCODE_DONE:
+        # Broker vastas selgelt: order lukati tagasi. See EI OLE unknown.
         return {"error": f"Order ebaõnnestus: {result.retcode} {result.comment}"}
 
     # DIAGNOSTIKA: result.price ja result.order on varem tulnud tühjadena (0.0 / 0)
@@ -330,6 +341,50 @@ def get_all_positions(symbol=None):
             "magic":      p.magic,
         })
     return result
+
+
+def get_all_positions_t(symbol=None):
+    """
+    Nagu get_all_positions(), aga ERISTAB "positsioone ei ole" ja
+    "ei saanud lugeda". Tagastab (ok, list).
+
+    PHASE 1 (17.09.2026): get_all_positions() tagastab [] nii siis, kui
+    MT5 pole uhendatud, kui ka siis, kui positsioone pariselt ei ole.
+    Duplikaatkaitse jaoks on see vahe eluliselt tahtis: lugemata jaanud
+    seisu EI TOHI tolgendada kui "positsiooni ei ole".
+    Vana funktsioon jaab muutmata, et sync_mt5_positions() kaituks tapselt
+    nagu varem.
+    """
+    if not is_connected():
+        return False, []
+    try:
+        if symbol:
+            sym = _SYMBOL_MAP.get(symbol, symbol.replace("/", ""))
+            positions = mt5.positions_get(symbol=sym)
+        else:
+            positions = mt5.positions_get()
+    except Exception as e:
+        logger.error(f"get_all_positions_t erind: {e}")
+        return False, []
+
+    if positions is None:
+        logger.warning(f"positions_get tagastas None: {mt5.last_error()}")
+        return False, []
+
+    out = []
+    for p in positions:
+        out.append({
+            "ticket":     p.ticket,
+            "symbol":     p.symbol,
+            "direction":  "buy" if p.type == mt5.ORDER_TYPE_BUY else "sell",
+            "volume":     p.volume,
+            "price_open": p.price_open,
+            "profit":     p.profit,
+            "sl":         p.sl,
+            "tp":         p.tp,
+            "magic":      p.magic,
+        })
+    return True, out
 
 
 def get_account_balance():

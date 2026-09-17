@@ -88,13 +88,43 @@ def sb_insert(table, data, retry=True):
         return sb_insert(table, data, retry=False)
     return False
 
-def sb_select(table, params=""):
+def sb_select_t(table, params=""):
+    """
+    Nagu sb_select(), aga ERISTAB "tulemusi ei ole" ja "ei saanud lugeda".
+    Tagastab (ok: bool, read: list).
+
+    PHASE 1 (17.09.2026). Vana sb_select() tagastas [] NII tuhja tulemuse
+    KUI KA vea/timeouti/mitte-200 korral. Turvakontrollid tolgendasid seda
+    kui "positsiooni ei ole", "tana pole kaubeldud", "circuit breakerit ei
+    ole" — ehk Supabase'i katkestus VOTTIS KOIK KAITSED KORRAGA MAHA.
+    Turvakriitilised kutsujad peavad kasutama SEDA funktsiooni ja
+    ok=False korral kauplemise PEATAMA (fail-closed).
+    """
     try:
-        r = requests.get(f"{SUPABASE_URL}/rest/v1/{table}?{params}", headers=sb_headers(), timeout=10)
-        return r.json() if r.status_code == 200 else []
+        r = requests.get(f"{SUPABASE_URL}/rest/v1/{table}?{params}",
+                         headers=sb_headers(), timeout=10)
     except Exception as e:
-        logger.error(f"SB select: {e}")
-        return []
+        logger.error(f"SB select {table}: {e}")
+        return False, []
+    if r.status_code != 200:
+        logger.warning(f"SB select {table}: HTTP {r.status_code} — {r.text[:200]}")
+        return False, []
+    try:
+        read = r.json()
+    except Exception as e:
+        logger.error(f"SB select {table}: vigane JSON: {e}")
+        return False, []
+    if not isinstance(read, list):
+        logger.error(f"SB select {table}: oodati listi, saadi {type(read).__name__}")
+        return False, []
+    return True, read
+
+def sb_select(table, params=""):
+    """Ohuke umbris. Kaitub TAPSELT nagu enne: vea korral []. Kasuta seda
+    AINULT seal, kus tuhi tulemus ja viga on vordvaarsed (dashboard,
+    logid, statistika) — MITTE turvakontrollides."""
+    _, read = sb_select_t(table, params)
+    return read
 
 def log_trade_close(pos, pnl, close_price=None, reason="", close_time=None):
     """
@@ -251,15 +281,51 @@ def check_telegram_commands():
                 continue  # ignoreeri kõiki teisi saatjaid
 
             if text in ("/reset", "/resume"):
-                rows = sb_select("bot_state", "id=eq.1&select=risk")
-                risk = rows[0].get("risk", {}) if rows else {}
+                # PHASE 1 PARANDUS (17.09.2026). /reset EI TOHI HADAPIDURIT
+                # EEMALDADA. Kaks viga olid siin sees:
+                #   1) lugemine oli fail-open (sb_select). Kui see ebaonnestus,
+                #      sai risk = {} ja sb_upsert kirjutas KOGU risk-objekti
+                #      ule -> bot_state.risk.trading_disabled kustus vaikselt,
+                #      ilma et keegi oleks seda kunagi naganud.
+                #   2) koodis ei olnud kuskil kirjas, et seda lippu ei tohi
+                #      puutuda — ta lihtsalt juhtus ellu jaama.
+                # Nuud: lugemine fail-closed (ei saa lugeda -> EI KIRJUTA
+                # MIDAGI) ja lipp kirjutatakse eksplitsiitselt tagasi.
+                # /reset puhastab AINULT circuit'i ja daily_gold_halt'i.
+                # Lokaalset STOP_TRADING faili /reset ei puutu ega naegi.
+                ok, rows = sb_select_t("bot_state", "id=eq.1&select=risk")
+                if not ok:
+                    add_log("⛔ /reset: bot_state lugemine ebaõnnestus — "
+                            "ühtegi olekut EI muudetud")
+                    send_telegram(
+                        "⚠️ <b>/reset ei õnnestunud</b>\n"
+                        "Andmebaasi ei saanud lugeda, seega EI muudetud mitte "
+                        "midagi. Nii ei saa hädapidur kogemata kaduda. "
+                        "Proovi hiljem uuesti.")
+                    continue
+                risk = (rows[0].get("risk") or {}) if rows else {}
+                hadapidur = risk.get("trading_disabled")
                 had_pause = bool(risk.get("circuit", {}).get("paused_until_day") or
                                   risk.get("circuit", {}).get("paused_until_week") or
                                   risk.get("daily_gold_halt"))
                 risk.pop("circuit", None)
                 risk.pop("daily_gold_halt", None)
+                # Hadapiduri lipp laheb TAPSELT sellisena tagasi, nagu ta oli.
+                if hadapidur:
+                    risk["trading_disabled"] = hadapidur
                 sb_upsert("bot_state", {"id": 1, "risk": risk})
-                if had_pause:
+                if hadapidur:
+                    add_log("⛔ /reset: pausid eemaldatud, AGA hädapidur "
+                            "trading_disabled jääb kehtima")
+                    send_telegram(
+                        "⛔ <b>HÄDAPIDUR ON ENDISELT AKTIIVNE</b>\n"
+                        "Pausid (circuit breaker, päevalimiit) eemaldati, aga "
+                        "<b>uusi ordereid EI SAADETA</b> — <code>trading_disabled</code> "
+                        "on seatud ja /reset EI eemalda seda.\n"
+                        "Taaslubamiseks käsitsi: kustuta VPS-il fail "
+                        "<code>STOP_TRADING</code> JA eemalda andmebaasist "
+                        "<code>bot_state.risk.trading_disabled</code>.")
+                elif had_pause:
                     send_telegram("✅ Kauplemine taasalustatud — kõik pausid (circuit breaker, päevalimiit) eemaldatud.")
                     add_log("🔓 Kaugjuhtimisega reset tehtud Telegrami käsuga")
                 else:
@@ -274,11 +340,23 @@ def check_telegram_commands():
                 send_telegram(
                     "🤖 <b>Käsud</b>\n"
                     "/status — balance ja equity\n"
+                    "/stop — HÄDAPIDUR: keela kõik uued orderid\n"
                     "/reset — eemalda pausid (circuit breaker, päevalimiit)\n"
                     "/restart — taaskäivita bot (kettal olev kood)\n"
                     "/update — tõmba GitHubist uus kood ja taaskäivita\n"
                     "/help — see nimekiri"
                 )
+
+            elif text == "/stop":
+                # HADAPIDUR. AINULT keelab — lubavat kasku ei ole.
+                keela_kauplemine("Telegrami käsk /stop")
+                add_log("⛔ HÄDAPIDUR: kauplemine keelatud Telegrami käsuga /stop")
+                send_telegram(
+                    "⛔ <b>HÄDAPIDUR AKTIVEERITUD</b>\n"
+                    "Uusi ordereid EI SAADETA.\n"
+                    "Olemasolevad positsioonid jäävad puutumata koos oma SL/TP-ga.\n"
+                    "Taaslubamiseks: kustuta VPS-il fail <code>STOP_TRADING</code> "
+                    "JA eemalda andmebaasist bot_state.risk.trading_disabled.")
 
             elif text == "/restart":
                 do_restart("Telegrami käsk /restart")
@@ -288,6 +366,62 @@ def check_telegram_commands():
 
     except Exception as e:
         logger.error(f"Telegram commands check: {e}")
+
+# ─────────────────────────────────────────────────────────
+#  HADAPIDUR (PHASE 1, 17.09.2026)
+# ─────────────────────────────────────────────────────────
+#  Uks selge olek: LUBATUD / KEELATUD / TUNDMATU.
+#  TUNDMATU == KEELATUD. Kontrollitakse VAHETULT enne iga uut orderit.
+#  Ei sule olemasolevaid positsioone ega muuda nende SL/TP-d.
+STOP_FAIL = "STOP_TRADING"          # lihtsalt loo see fail botikausta
+
+
+def kauplemine_lubatud():
+    """
+    Tagastab (lubatud: bool, pohjus: str).
+
+    Kaks soltumatut keelamisallikat, molemad fail-closed:
+      1) LOKAALNE FAIL botikaustas — toimib ka siis, kui Supabase ja
+         Telegram on maas. See on paris hadapidur: logi VPS-i sisse ja
+         loo fail. Erind faili kontrollimisel -> KEELATUD.
+      2) DB lipp bot_state.risk.trading_disabled, loetud sb_select_t'ga:
+         lugemine ebaonnestus -> KEELATUD (fail-closed)
+         lipp tosi            -> KEELATUD
+         lipp puudub/vaar     -> LUBATUD
+
+    Lubavat Telegrami kasku TEADLIKULT EI OLE. Taaslubamiseks tuleb
+    kustutada lokaalne fail JA eemaldada DB lipp kasitsi.
+    """
+    try:
+        if os.path.exists(os.path.join(_bot_dir(), STOP_FAIL)):
+            return False, f"lokaalne {STOP_FAIL} fail on olemas"
+    except Exception as e:
+        return False, f"{STOP_FAIL} kontroll ebaonnestus: {e}"
+
+    ok, rows = sb_select_t("bot_state", "id=eq.1&select=risk")
+    if not ok:
+        return False, "kill-switch olekut ei saanud andmebaasist lugeda"
+    risk = (rows[0].get("risk") or {}) if rows else {}
+    if risk.get("trading_disabled"):
+        return False, "DB lipp trading_disabled on seatud"
+    return True, "lubatud"
+
+
+def keela_kauplemine(pohjus):
+    """Seab MOLEMAD keelamisallikad. Kasutab ainult /stop kask."""
+    try:
+        with open(os.path.join(_bot_dir(), STOP_FAIL), "w", encoding="utf-8") as f:
+            f.write(f"{datetime.now(timezone.utc).isoformat()} {pohjus}\n")
+    except Exception as e:
+        logger.error(f"STOP faili kirjutamine ebaonnestus: {e}")
+    try:
+        _, rows = sb_select_t("bot_state", "id=eq.1&select=risk")
+        risk = (rows[0].get("risk") or {}) if rows else {}
+        risk["trading_disabled"] = True
+        sb_upsert("bot_state", {"id": 1, "risk": risk})
+    except Exception as e:
+        logger.error(f"trading_disabled lipu seadmine ebaonnestus: {e}")
+
 
 def get_balance():
     mt5_balance = ct.get_account_balance()
@@ -302,19 +436,55 @@ def get_balance():
 #  CIRCUIT BREAKER
 # ─────────────────────────────────────────────────────────
 
-def get_circuit_state():
-    """Loe circuit breaker olek Supabase-st."""
-    rows = sb_select("bot_state", "id=eq.1&select=risk")
+def get_circuit_state_t():
+    """Loe circuit breaker olek. Tagastab (ok, dict). PHASE 1: kui lugemine
+    ebaonnestub, peab kutsuja kauplemise peatama, mitte eeldama, et pausi
+    ei ole."""
+    ok, rows = sb_select_t("bot_state", "id=eq.1&select=risk")
+    if not ok:
+        return False, {}
     if rows and rows[0].get("risk"):
-        return rows[0]["risk"].get("circuit", {})
-    return {}
+        return True, rows[0]["risk"].get("circuit", {})
+    return True, {}
+
+def get_circuit_state():
+    """Ohuke umbris, kaitub nagu enne (vea korral {})."""
+    _, st = get_circuit_state_t()
+    return st
 
 def save_circuit_state(state):
-    """Salvesta circuit breaker olek."""
+    """Salvesta circuit breaker olek.
+
+    PHASE 1 PARANDUS (17.09.2026): siin oli TAPSELT sama viga, mis oli
+    /reset'is. Lugemine oli fail-open (sb_select) ja seejarel kirjutati
+    KOGU risk-objekt tagasi. Kui see uks lugemine ebaonnestus, sai
+    risk = {} ja upsert kustutas bot_state.risk.trading_disabled ehk
+    hadapiduri DB-poole — vaikselt, ilma et keegi oleks naganud.
+    See ei olnud teoreetiline: check_circuit_breaker kutsub selle
+    funktsiooni vahemalt kord paevas (paevavahetus) ja see jookseb
+    main() sees ENNE kauplemine_lubatud() kontrolli, seega lipp oleks
+    voinud kaduda ja bot samas skannis kauplema hakata.
+
+    Nuud:
+      * lugemine on fail-closed — kui ei saa lugeda, EI KIRJUTA MIDAGI
+        ja hadapidur jaab puutumata
+      * trading_disabled kirjutatakse eksplitsiitselt tagasi
+
+    Circuit breaker ise sellest ei kannata: kui salvestus jaab vahele,
+    tuvastatakse sama olukord jargmisel skannil uuesti equity pealt.
+    """
     try:
-        rows = sb_select("bot_state", "id=eq.1&select=risk")
-        risk = rows[0].get("risk", {}) if rows else {}
+        ok, rows = sb_select_t("bot_state", "id=eq.1&select=risk")
+        if not ok:
+            logger.warning("save_circuit: bot_state lugemine ebaonnestus — "
+                           "ei kirjuta midagi (hadapiduri kaitse)")
+            return
+        risk = (rows[0].get("risk") or {}) if rows else {}
+        hadapidur = risk.get("trading_disabled")
         risk["circuit"] = state
+        # Hadapiduri lipp laheb TAPSELT sellisena tagasi, nagu ta oli.
+        if hadapidur:
+            risk["trading_disabled"] = hadapidur
         sb_upsert("bot_state", {"id": 1, "risk": risk})
     except Exception as e:
         logger.error(f"save_circuit: {e}")
@@ -327,7 +497,11 @@ def check_circuit_breaker(balance, now):
     """
     # Kasuta equity-t — see näitab tegelikku drawdown-i reaalajas
     equity = get_account_equity()
-    circuit = get_circuit_state()
+    # PHASE 1: circuit breakeri olekut EI TOHI lugeda fail-open'ina.
+    ok, circuit = get_circuit_state_t()
+    if not ok:
+        add_log("⛔ Circuit breakeri olekut ei saanud lugeda — kauplemine peatatud (fail-closed)")
+        return False
     today = now.strftime("%Y-%m-%d")
     week  = now.strftime("%Y-W%W")
 
@@ -945,6 +1119,9 @@ def run_gold_core_overlay(price, high, low, now, df):
 # ─────────────────────────────────────────────────────────
 
 _symbol_cache = {}
+# PHASE 1: jalad, mille viimane order_send andis TUNDMATU tulemuse.
+# Vabaneb alles siis, kui brokeri seis on EDUKALT loetud.
+_lahendamata = {}
 
 
 def resolve_broker_symbol(candidates):
@@ -999,7 +1176,15 @@ def run_portfolio_leg(leg, now):
     if price <= 0:
         price = float(df["close"].iloc[-1])
     session = f"pf_{name}"
-    open_pos = sb_select("signals", f"executed=eq.false&session=eq.{session}&order=created_at.asc")
+    # PHASE 1: fail-closed. Lugemata jaanud seisu EI TOHI tolgendada kui
+    # "positsiooni ei ole". "recovered" read on samuti PARIS positsioonid
+    # (nt order taitus, aga DB-kirje ebaonnestus ja sync leidis ta hiljem).
+    db_ok, open_pos = sb_select_t(
+        "signals",
+        f"executed=eq.false&session=in.({session},recovered_{sym})&order=created_at.asc")
+    if not db_ok:
+        add_log(f"⛔ {name}: avatud positsioonide lugemine ebaõnnestus — uut orderit ei saadeta")
+        return
 
     # ── sulgemised ──
     # EEMALDATUD 12. sept 2026 — sulgemisi haldab ainult sync_mt5_positions().
@@ -1035,7 +1220,11 @@ def run_portfolio_leg(leg, now):
     # NB: see loeb KÕIKI portfelli jalgu, mitte ainult seda üht.
     max_total = int(GRID_CONFIG.get("portfolio_max_open_total", 0) or 0)
     if max_total > 0:
-        koik_lahti = sb_select("signals", "executed=eq.false&regime=eq.portfolio")
+        lagi_ok, koik_lahti = sb_select_t(
+            "signals", "executed=eq.false&regime=in.(portfolio,recovered)")
+        if not lagi_ok:
+            add_log(f"⛔ {name}: positsioonilae lugemine ebaõnnestus — uut orderit ei saadeta")
+            return
         if len(koik_lahti) >= max_total:
             add_log(f"⏸ {name}: portfellis juba {len(koik_lahti)} positsiooni "
                     f"(lagi {max_total}) — uut ei avata")
@@ -1044,7 +1233,12 @@ def run_portfolio_leg(leg, now):
     # minut, nii et sama päevabaari signaal käivituks ikka ja jälle (ka kohe
     # pärast TP/SL sulgemist). Seepärast: üks sisenemine päevas jala kohta.
     today_iso = now.strftime("%Y-%m-%d")
-    if sb_select("signals", f"session=eq.{session}&created_at=gte.{today_iso}&limit=1"):
+    paev_ok, paev_read = sb_select_t(
+        "signals", f"session=eq.{session}&created_at=gte.{today_iso}&limit=1")
+    if not paev_ok:
+        add_log(f"⛔ {name}: päevalimiidi lugemine ebaõnnestus — uut orderit ei saadeta")
+        return
+    if paev_read:
         return
     fn = _portfolio_signal_fn(leg.get("signal"))
     if fn is None:
@@ -1091,9 +1285,46 @@ def run_portfolio_leg(leg, now):
         add_log(f"🛡 {name}: lot piiratud → {lot} (max kahjum {max_loss:.0f}€)")
     tp = round(price + tp_dist if direction == "buy" else price - tp_dist, 5)
     sl = round(price - sl_dist if direction == "buy" else price + sl_dist, 5)
+    # ── ORDERI PIIR (PHASE 1) ────────────────────────────────────────
+    # Enne viimast kutset, mis voib tekitada UUE live-orderi, peab olema
+    # toestatud KOIK jargnev. Kui midagi neist ei saa kindlaks teha,
+    # ORDERIT EI SAADETA.
+    lubatud, pohjus = kauplemine_lubatud()
+    if not lubatud:
+        add_log(f"⛔ {name}: kauplemine keelatud ({pohjus}) — uut orderit ei saadeta")
+        return
+
+    # Brokeri seis on AINUS autoriteet. Katab ka juhu, kus eelmine order
+    # taitus, aga DB-kirje ebaonnestus, ning kasitsi avatud positsioonid
+    # (suvaline magic).
+    pos_ok, brokeri_pos = ct.get_all_positions_t(sym)
+    if not pos_ok:
+        add_log(f"⛔ {name}: brokeri positsioone ei saanud lugeda — uut orderit ei saadeta")
+        return
+    if brokeri_pos:
+        add_log(f"⏸ {name}: brokeril on juba {len(brokeri_pos)} lahtist positsiooni "
+                f"({sym}) — uut ei avata")
+        return
+
+    # Lahendamata eelmine katse: order_send'i tulemus oli TUNDMATU, seega
+    # order VOIB olla brokeril taitunud. Kuna me just lugesime brokeri
+    # seisu EDUKALT ja positsiooni ei ole, on olukord lahendatud ja lukk
+    # vabaneb. Automaatset korduskatset ilma selle kontrollita EI TEHTA.
+    if _lahendamata.pop(session, None):
+        add_log(f"🔎 {name}: eelmine tundmatu order lahendatud — brokeril positsiooni ei ole")
+
     res = ct.place_order(direction, sym, lot, tp=tp, sl=sl)
     if "error" in res:
-        add_log(f"❌ {name} order ebaõnnestus: {res['error']}")
+        if res.get("unknown"):
+            # EI TEA, kas broker sai orderi. Ei korda enne leppimist.
+            _lahendamata[session] = True
+            add_log(f"⚠️ {name}: order_send tulemus TUNDMATU ({res['error']}) — "
+                    f"uut orderit EI SAADETA enne brokeri seisu kontrolli")
+            send_telegram(f"⚠️ <b>{name}: orderi tulemus tundmatu</b>\n"
+                          f"Broker võis orderi vastu võtta. Bot ei korda seda "
+                          f"enne, kui brokeri seis on loetud. Kontrolli MT5-st.")
+        else:
+            add_log(f"❌ {name} order ebaõnnestus: {res['error']}")
         return
     ok = sb_insert("signals", {
         "direction": direction, "entry": round(price, 5), "tp": tp, "sl": sl,
