@@ -6,6 +6,7 @@ Kasutab MetaTrader5 Python teeki (töötab ainult Windowsil).
 import os
 import time
 import logging
+import threading
 import pandas as pd
 import MetaTrader5 as mt5
 from datetime import datetime, timezone
@@ -45,17 +46,46 @@ _SYMBOL_MAP = {
     "GBP/NZD": "GBPNZD",
 }
 
+# MT5 SERIALISEERIMISKIHT (18.09.2026).
+# MetaTrader5 Pythoni pakett EI OLE ametlikult dokumenteeritud
+# thread-safe'ina (kontrollitud: ametlik dokumentatsioon ei maini
+# "thread" sõna kordagi; ainus leitud kogukonna-vastus MQL5 foorumist
+# on tingimuslik ega ole MetaQuotes'i kinnitatud — vt uuring). See
+# lock ei eelda MT5 enda ohutust kummaski suunas — ta lihtsalt
+# TAGAB, et KAKS Python-lõimet ei kutsu kunagi mt5.* funktsiooni
+# üheaegselt SAMAST protsessist, sõltumata sellest, kas MT5 seda
+# ka ise vajaks.
+#
+# RLock, mitte Lock: is_connected() kutsub _connect()'i, mis ISE
+# omakorda teeb mt5.* kutseid — RLock lubab sama lõimel lukku
+# taaskasutada ilma iseennast blokeerimata.
+_MT5_LOCK = threading.RLock()
+
+
+def _mt5_call(func, *args, **kwargs):
+    """Kutsu ÜKSKÕIK millist mt5.* funktsiooni ühise lukustuse all.
+
+    KÕIK selle mooduli otsesed mt5.* kutsed käivad selle funktsiooni
+    kaudu — vaata iga def'i allpool. Lukk katab AINULT MT5 API
+    kutse ennast (üks funktsioonikutse), mitte Supabase/Telegrami
+    päringuid, sleep'i ega muud aeglast välist tööd — neid selles
+    failis kunagi ei tehtagi (mt5_connector.py teeb ainult MT5
+    kutseid ja lokaalset arvutust/logimist).
+    """
+    with _MT5_LOCK:
+        return func(*args, **kwargs)
+
 
 def _connect():
     global _connected
     if _connected:
         return True
-    if not mt5.initialize():
-        logger.error(f"MT5 initialize failed: {mt5.last_error()}")
+    if not _mt5_call(mt5.initialize):
+        logger.error(f"MT5 initialize failed: {_mt5_call(mt5.last_error)}")
         return False
-    if not mt5.login(MT5_LOGIN, password=MT5_PASSWORD, server=MT5_SERVER):
-        logger.error(f"MT5 login failed: {mt5.last_error()}")
-        mt5.shutdown()
+    if not _mt5_call(mt5.login, MT5_LOGIN, password=MT5_PASSWORD, server=MT5_SERVER):
+        logger.error(f"MT5 login failed: {_mt5_call(mt5.last_error)}")
+        _mt5_call(mt5.shutdown)
         return False
     _connected = True
     logger.info(f"MT5 ühendatud: konto {MT5_LOGIN} @ {MT5_SERVER}")
@@ -66,7 +96,7 @@ def is_connected():
     global _connected
     if not _connected:
         return _connect()
-    info = mt5.account_info()
+    info = _mt5_call(mt5.account_info)
     if info is None:
         _connected = False
         return _connect()
@@ -88,7 +118,7 @@ def get_price_ctrader(symbol_td):
     if not is_connected():
         return 0.0
     sym = _SYMBOL_MAP.get(symbol_td, symbol_td.replace("/", ""))
-    tick = mt5.symbol_info_tick(sym)
+    tick = _mt5_call(mt5.symbol_info_tick, sym)
     if tick is None:
         logger.error(f"MT5 tick puudub: {sym}")
         return 0.0
@@ -107,9 +137,9 @@ def get_candles(symbol_td, interval="1h", count=100):
     sym = _SYMBOL_MAP.get(symbol_td, symbol_td.replace("/", ""))
     tf  = _TF_MAP.get(interval, mt5.TIMEFRAME_H1)
 
-    rates = mt5.copy_rates_from_pos(sym, tf, 0, count)
+    rates = _mt5_call(mt5.copy_rates_from_pos, sym, tf, 0, count)
     if rates is None or len(rates) == 0:
-        logger.error(f"MT5 küünlad puuduvad: {sym} {interval} — {mt5.last_error()}")
+        logger.error(f"MT5 küünlad puuduvad: {sym} {interval} — {_mt5_call(mt5.last_error)}")
         return None
 
     df = pd.DataFrame(rates)
@@ -136,7 +166,7 @@ def place_order(direction, symbol_name, lot, tp=None, sl=None):
         return {"error": "MT5 pole ühendatud"}
 
     sym = _SYMBOL_MAP.get(symbol_name, symbol_name.replace("/", ""))
-    tick = mt5.symbol_info_tick(sym)
+    tick = _mt5_call(mt5.symbol_info_tick, sym)
     if tick is None:
         return {"error": f"Tick puudub: {sym}"}
 
@@ -147,7 +177,7 @@ def place_order(direction, symbol_name, lot, tp=None, sl=None):
     # trade_freeze_level, punktides) ja laienda TP/SL vajadusel selle
     # täitmiseks — varem lükkas broker mõned scalp-orderid tagasi
     # "Invalid stops" (10016) veaga, kui arvutatud SL/TP jäi liiga lähedale.
-    info = mt5.symbol_info(sym)
+    info = _mt5_call(mt5.symbol_info, sym)
     min_dist = 0.0
     if info is not None:
         min_stop_points = max(getattr(info, "trade_stops_level", 0),
@@ -189,12 +219,12 @@ def place_order(direction, symbol_name, lot, tp=None, sl=None):
     # enne, kui brokeri seis on uuesti kokku loetud. Order'i parameetreid
     # (hind, lot, SL, TP, deviation, filling) see EI muuda.
     try:
-        result = mt5.order_send(request)
+        result = _mt5_call(mt5.order_send, request)
     except Exception as e:
         logger.error(f"order_send erind: {e}")
         return {"error": f"order_send erind: {e}", "unknown": True}
     if result is None:
-        return {"error": f"order_send tagastas None: {mt5.last_error()}",
+        return {"error": f"order_send tagastas None: {_mt5_call(mt5.last_error)}",
                 "unknown": True}
     if result.retcode != mt5.TRADE_RETCODE_DONE:
         # Broker vastas selgelt: order lukati tagasi. See EI OLE unknown.
@@ -230,14 +260,14 @@ def close_position(ticket):
         logger.error("close_position: MT5 pole ühendatud")
         return False
 
-    pos = mt5.positions_get(ticket=ticket)
+    pos = _mt5_call(mt5.positions_get, ticket=ticket)
     if not pos:
         logger.warning(f"close_position: positsioon {ticket} ei leitud MT5-s")
         return False
 
     p = pos[0]
     sym = p.symbol
-    tick = mt5.symbol_info_tick(sym)
+    tick = _mt5_call(mt5.symbol_info_tick, sym)
     if tick is None:
         logger.error(f"close_position: tick puudub {sym}")
         return False
@@ -259,9 +289,9 @@ def close_position(ticket):
         "type_filling": mt5.ORDER_FILLING_IOC,
     }
 
-    result = mt5.order_send(request)
+    result = _mt5_call(mt5.order_send, request)
     if result is None or result.retcode != mt5.TRADE_RETCODE_DONE:
-        err = result.comment if result else mt5.last_error()
+        err = result.comment if result else _mt5_call(mt5.last_error)
         logger.error(f"close_position ebaõnnestus ticket={ticket}: {err}")
         return False
 
@@ -279,9 +309,9 @@ def get_open_positions(symbol=None):
 
     if symbol:
         sym = _SYMBOL_MAP.get(symbol, symbol.replace("/", ""))
-        positions = mt5.positions_get(symbol=sym)
+        positions = _mt5_call(mt5.positions_get, symbol=sym)
     else:
-        positions = mt5.positions_get()
+        positions = _mt5_call(mt5.positions_get)
 
     if positions is None:
         return []
@@ -320,9 +350,9 @@ def get_all_positions(symbol=None):
 
     if symbol:
         sym = _SYMBOL_MAP.get(symbol, symbol.replace("/", ""))
-        positions = mt5.positions_get(symbol=sym)
+        positions = _mt5_call(mt5.positions_get, symbol=sym)
     else:
-        positions = mt5.positions_get()
+        positions = _mt5_call(mt5.positions_get)
 
     if positions is None:
         return []
@@ -360,15 +390,15 @@ def get_all_positions_t(symbol=None):
     try:
         if symbol:
             sym = _SYMBOL_MAP.get(symbol, symbol.replace("/", ""))
-            positions = mt5.positions_get(symbol=sym)
+            positions = _mt5_call(mt5.positions_get, symbol=sym)
         else:
-            positions = mt5.positions_get()
+            positions = _mt5_call(mt5.positions_get)
     except Exception as e:
         logger.error(f"get_all_positions_t erind: {e}")
         return False, []
 
     if positions is None:
-        logger.warning(f"positions_get tagastas None: {mt5.last_error()}")
+        logger.warning(f"positions_get tagastas None: {_mt5_call(mt5.last_error)}")
         return False, []
 
     out = []
@@ -391,7 +421,7 @@ def get_account_balance():
     """Tagasta konto saldo."""
     if not is_connected():
         return None
-    info = mt5.account_info()
+    info = _mt5_call(mt5.account_info)
     if info is None:
         return None
     return info.balance
@@ -401,7 +431,7 @@ def get_account_equity():
     """Tagasta konto equity (balance + lahtiste positsioonide P&L)."""
     if not is_connected():
         return None
-    info = mt5.account_info()
+    info = _mt5_call(mt5.account_info)
     if info is None:
         return None
     return info.equity
@@ -423,7 +453,7 @@ def get_closed_deal_pnl(ticket):
     if not is_connected():
         return None
     try:
-        deals = mt5.history_deals_get(position=int(ticket))
+        deals = _mt5_call(mt5.history_deals_get, position=int(ticket))
     except Exception as e:
         logger.error(f"get_closed_deal_pnl({ticket}): {e}")
         return None
