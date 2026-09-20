@@ -44,7 +44,7 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;z-index:0;
 /* ── nav ───────────────────────────────────────────────── */
 nav{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;padding:14px 22px;margin-bottom:16px}
 .brand{display:flex;align-items:center;gap:14px}
-.mark{position:relative;width:44px;height:44px}
+.mark{position:relative;width:44px;height:44px;flex-shrink:0}
 .mark-glow{position:absolute;inset:-8px;border-radius:50%;background:radial-gradient(circle,var(--gold),transparent 70%);animation:pulse-glow 3.5s ease-in-out infinite}
 .mark-ring{position:absolute;inset:0;border-radius:50%;border:1.5px solid var(--goldline);animation:spin 14s linear infinite}
 .mark-ring2{position:absolute;inset:6px;border-radius:50%;border:1px dashed var(--blueline);animation:spin-r 10s linear infinite}
