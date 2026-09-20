@@ -1,6 +1,11 @@
 __pycache__/
 *.pyc
 
+# Uuringuskriptid/testandmed (nt Oanor API-võtmega seotud testid) —
+# teadlikult EI kuulu live-boti repo versioonihaldusesse, nõutud
+# korduvalt selle sessiooni ülesannetes ("research/ EI lähe commit'i").
+research/
+
 # Ajaloolised hinnaandmed backtest.py jaoks — reaalsed broker/andmeteenuse
 # eksportid, ei kuulu koodi versioonihaldusesse (suured, muutuvad, isiklikud).
 bot/data/*
