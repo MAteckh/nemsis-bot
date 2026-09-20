@@ -1779,69 +1779,33 @@ def _newstick_any_open_position():
     return False, None
 
 
-def _newstick_process_group(rows, state):
+def _newstick_attempt_target(currency, instrument, quote, agg, n_used, usable, rows):
     """
-    Töötle KÕIK sama valuuta+minuti Tier1 sündmused korraga (vt
-    newstick_engine.group_by_currency_minute). Muudab `state`
-    ('errors'/'processed') IN-PLACE. Tagastab True, kui tehing avati.
+    Proovi avada ÜKS News-Tick tehing ÜHE sihtmärk-instrumendi peal
+    (currency+minuti grupi jaoks juba arvutatud agg'iga). Tagastab True,
+    kui tehing "kasutas ära" selle grupi (order saadeti, tulemus TEADA
+    VÕI UNKNOWN) — kutsuja EI TOHI pärast True't sama grupi peale
+    JÄRGMIST sihtmärki proovida (max 1 News-Tick positsioon kokku).
     """
-    event_keys = [ne.event_dedup_key(r["date"], r["time_gmt"], r["country"], r["indicator"])
-                  for r in rows]
-    if all(k in state["processed"] for k in event_keys):
-        return False
-
-    usable = []
-    for r, key in zip(rows, event_keys):
-        if key in state["processed"]:
-            continue
-        if r["skip_reason"]:
-            add_log(f"[NEWS-TICK SKIP] {r['indicator']} {r['country']}: {r['skip_reason']}")
-            continue
-        if r["actual"] is None:
-            add_log(f"[NEWS-TICK SKIP] {r['indicator']} {r['country']}: no actual")
-            continue
-        err_key = f"{r['country']}|{r['indicator']}"
-        history = state["errors"].get(err_key, [])
-        z = ne.compute_z(r["actual"], r["consensus"], history)
-        state["errors"][err_key] = ne.update_error_history(history, r["actual"], r["consensus"])
-        if z is None:
-            add_log(f"[NEWS-TICK SKIP] {r['indicator']} {r['country']}: below z threshold "
-                    f"(insufficient error history or SD=0)")
-            continue
-        usable.append({"indicator": r["indicator"], "z": z, "row": r})
-
-    # KÕIK selle grupi event'id lähevad processed'iks (kasutatud VÕI
-    # lõplikult skip'itud) — Oanor tagastab sama nädala andmeid korduvalt,
-    # ilma selleta töödeldaks sama sündmust igal poll'il uuesti.
-    for key in event_keys:
-        if key not in state["processed"]:
-            state["processed"].append(key)
-    state["processed"] = state["processed"][-500:]
-
-    if not usable:
-        return False
-
-    agg, n_used = ne.aggregate_zscores(usable)
-    currency = rows[0]["currency"]
-    instrument, quote = ne.instrument_for_currency(currency)
-    if instrument is None:
-        add_log(f"[NEWS-TICK SKIP] {currency}: unmapped currency")
-        return False
-
     direction = ne.decide_direction(agg, quote)
     if direction is None:
-        add_log(f"[NEWS-TICK SKIP] {currency} @ {rows[0]['time_gmt']}: below z threshold "
-                f"(agg={agg:.3f}, n={n_used})")
+        add_log(f"[NEWS-TICK SKIP] {currency} @ {rows[0]['time_gmt']} -> {instrument}: "
+                f"below z threshold (agg={agg:.3f}, n={n_used})")
         return False
 
     ok_trade, pohjus = kauplemine_lubatud()
     if not ok_trade:
-        add_log(f"[NEWS-TICK SKIP] {currency}: trading disabled ({pohjus})")
+        add_log(f"[NEWS-TICK SKIP] {instrument}: trading disabled ({pohjus})")
         return False
 
+    # BSCV8 ADD XAUUSD: sõltumata magic-numbrist ja sõltumata sellest,
+    # kas positsiooni avas olemasolev kulla grid/portfell strateegia
+    # VÕI News-Tick ise — ÜKSKÕIK milline olemasolev positsioon KONTOL
+    # KOKKU blokeerib uue News-Tick tehingu (max 1 News-Tick positsioon,
+    # ja XAUUSD ei tohi kunagi kahekordistuda). Muutmata varasemast.
     has_pos, pos_reason = _newstick_any_open_position()
     if has_pos:
-        add_log(f"[NEWS-TICK SKIP] {currency}: existing position ({pos_reason})")
+        add_log(f"[NEWS-TICK SKIP] {instrument}: existing position ({pos_reason})")
         return False
 
     bid, ask = ct.get_bid_ask(instrument)
@@ -1889,6 +1853,43 @@ def _newstick_process_group(rows, state):
     add_log(f"[NEWS-TICK ENTRY] täidetud: ticket={ticket} price={fill_price} "
             f"execution_latency_ms={exec_latency_ms}")
 
+    # BSCV8 ADD XAUUSD: XAUUSD-l on olemasolev, ERALDI strateegia (grid/
+    # portfell), mis loeb OMA "kas positsioon juba lahti" kontrolli
+    # Supabase signals-tabelist (vt run_portfolio_leg()), MITTE otse
+    # MT5-st. See News-Tick tehing EI OLE seal muidu nähtav enne järgmist
+    # sync_mt5_positions() tsüklit (kuni SCAN_INTERVAL sekundit hiljem) —
+    # selle akna jooksul võiks olemasolev XAUUSD strateegia teadmatult
+    # TEISE XAUUSD positsiooni avada. Kirjutame SIIN, KOHE, "recovered_
+    # XAUUSD" kirje — TÄPSELT sama muster, mida sync_mt5_positions() ISE
+    # juba kasutab tundmatute positsioonide jaoks (vt seal), mida
+    # run_portfolio_leg() juba loeb (session=in.(pf_XAUUSD,recovered_
+    # XAUUSD)) — seega olemasolevat strateegiakoodi EI PUUDUTATA, ainult
+    # taaskasutatakse selle juba töötavat "recovered" mehhanismi, et
+    # olemasolev strateegia näeks positsiooni KOHESELT, mitte kuni ühe
+    # skanni hiljem. sync_mt5_positions() sulgeb selle kirje ISE, kui
+    # News-Tick oma 30s exit'iga positsiooni kinni paneb — täiendavat
+    # koodi selleks vaja ei ole.
+    if instrument == "XAUUSD":
+        try:
+            sb_insert("signals", {
+                "direction":  direction,
+                "entry":      fill_price if fill_price else entry_price,
+                "tp":         None,
+                "sl":         sl,
+                "lot":        lot,
+                "regime":     "recovered",
+                "session":    f"recovered_{instrument}",
+                "executed":   False,
+                "breakeven":  False,
+                "atr":        0,
+                "score":      0,
+                "mt5_ticket": ticket,
+            }, retry=False)
+        except Exception as e:
+            add_log(f"[NEWS-TICK ERROR] recovered_XAUUSD signals-kirje ebaõnnestus: {e} — "
+                    f"positsioon on MT5-s ikkagi olemas, sync_mt5_positions leiab selle "
+                    f"järgmisel skannil")
+
     def _delayed_exit():
         time.sleep(NEWS_TICK_CONFIG["hold_seconds"])
         try:
@@ -1907,6 +1908,73 @@ def _newstick_process_group(rows, state):
 
     threading.Thread(target=_delayed_exit, daemon=True).start()
     return True
+
+
+def _newstick_process_group(rows, state):
+    """
+    Töötle KÕIK sama valuuta+minuti Tier1 sündmused korraga (vt
+    newstick_engine.group_by_currency_minute). Muudab `state`
+    ('errors'/'processed') IN-PLACE. Tagastab True, kui tehing avati.
+
+    BSCV8 ADD XAUUSD (21.09.2026): valuuta võib kaarduda ÜHELE VÕI
+    KAHELE sihtmärk-instrumendile (vt ne.targets_for_currency — USD
+    kaardub nii EURUSD'ile KUI KA XAUUSD'ile, ülejäänud 7 valuutat
+    TÄPSELT ühele, muutmata). Sihtmärke proovitakse JÄRJEKORRAS ja
+    peatutakse esimese, mis "tarbib ära" selle grupi (vt
+    _newstick_attempt_target) — see on TÕLGENDUSVALIK ambivalentse
+    "kumb, kui mõlemad kõlbaksid" küsimuse jaoks (spec ei täpsustanud
+    prioriteeti): EURUSD (olemasolev, muutmata käitumine) proovitakse
+    ENNE XAUUSD'i (lisatud), et 7 olemasoleva instrumendi käitumine
+    jääks TÄPSELT samaks kui enne seda muudatust. Dokumenteeritud ka
+    lõpuraportis.
+    """
+    event_keys = [ne.event_dedup_key(r["date"], r["time_gmt"], r["country"], r["indicator"])
+                  for r in rows]
+    if all(k in state["processed"] for k in event_keys):
+        return False
+
+    usable = []
+    for r, key in zip(rows, event_keys):
+        if key in state["processed"]:
+            continue
+        if r["skip_reason"]:
+            add_log(f"[NEWS-TICK SKIP] {r['indicator']} {r['country']}: {r['skip_reason']}")
+            continue
+        if r["actual"] is None:
+            add_log(f"[NEWS-TICK SKIP] {r['indicator']} {r['country']}: no actual")
+            continue
+        err_key = f"{r['country']}|{r['indicator']}"
+        history = state["errors"].get(err_key, [])
+        z = ne.compute_z(r["actual"], r["consensus"], history)
+        state["errors"][err_key] = ne.update_error_history(history, r["actual"], r["consensus"])
+        if z is None:
+            add_log(f"[NEWS-TICK SKIP] {r['indicator']} {r['country']}: below z threshold "
+                    f"(insufficient error history or SD=0)")
+            continue
+        usable.append({"indicator": r["indicator"], "z": z, "row": r})
+
+    # KÕIK selle grupi event'id lähevad processed'iks (kasutatud VÕI
+    # lõplikult skip'itud) — Oanor tagastab sama nädala andmeid korduvalt,
+    # ilma selleta töödeldaks sama sündmust igal poll'il uuesti.
+    for key in event_keys:
+        if key not in state["processed"]:
+            state["processed"].append(key)
+    state["processed"] = state["processed"][-500:]
+
+    if not usable:
+        return False
+
+    agg, n_used = ne.aggregate_zscores(usable)
+    currency = rows[0]["currency"]
+    targets = ne.targets_for_currency(currency)
+    if not targets:
+        add_log(f"[NEWS-TICK SKIP] {currency}: unmapped currency")
+        return False
+
+    for instrument, quote in targets:
+        if _newstick_attempt_target(currency, instrument, quote, agg, n_used, usable, rows):
+            return True
+    return False
 
 
 def run_newstick_event_loop():

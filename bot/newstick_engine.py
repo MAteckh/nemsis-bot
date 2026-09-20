@@ -15,7 +15,13 @@ LUKUSTATUD SPETSIFIKATSIOON (kasutaja 20.09.2026 sõnumitest):
     enne suunaotsust, seejärel üks tehing. See on TÕLGENDUSVALIK (spec oli
     napisõnaline "sum(z) enne suunaotsust") — vt NEWSTICK_AGGREGATION_NOTE.
   * Suund: sign(summa) * mark, inverteeritud QUOTE-valuuta sündmuste jaoks.
-  * XAUUSD on News-Tick'ist TÄIELIKULT väljas.
+
+BSCV8 ADD XAUUSD (kasutaja 21.09.2026 sõnumist, laiendab ülal olevat
+lukustatud spec'i, ei muuda seda): XAUUSD ON nüüd News-Tick'i tradeable
+instrument, AGA AINULT USD Tier1 sündmuste kaudu, eraldi explicit
+mappinguna (vt XAUUSD_TRIGGER_CURRENCY/XAUUSD_INSTRUMENT allpool) —
+mitte tavalise valuutapaarina CURRENCY_MAP sees. Olemasolevad 7 FX
+instrumenti (sh USD->EURUSD) jäävad täpselt muutmata.
 """
 import re
 import statistics
@@ -65,7 +71,9 @@ INDICATOR_MARK = {
 
 # valuuta -> (instrument, quote) — quote=True tähendab, et see valuuta on
 # instrumendi QUOTE-pool (nt USD on EURUSD quote), seega suund tuleb
-# inverteerida. XAUUSD ei ole siin kunagi.
+# inverteerida. TÄPSELT 7 FX instrumenti, muutmata (BSCV8 ADD XAUUSD
+# ülesanne, 21.09.2026: "Olemasolevad 7 FX instrumenti ja nende senine
+# valuutaloogika jäävad muutmata").
 CURRENCY_MAP = {
     "EUR": ("EURUSD", False),
     "USD": ("EURUSD", True),
@@ -77,6 +85,45 @@ CURRENCY_MAP = {
     "NZD": ("NZDUSD", False),
 }
 
+# ── XAUUSD (BSCV8 ADD XAUUSD, 21.09.2026) ───────────────────────────
+# Kasutaja LUKUSTATUD spec: "XAUUSD lisatakse eraldi explicit News-Tick
+# instrument mappinguna. ÄRA käsitle XAUUSD-i nagu tavalist valuutapaari."
+# Seetõttu EI OLE see CURRENCY_MAP sees (see jääks vale — XAUUSD pole
+# valuutapaar, sellel pole "quote-valuutat" tavamõttes) — eraldi
+# konstandid + targets_for_currency() allpool.
+#
+# AINULT USD Tier1 sündmused vallandavad XAUUSD'i. Suund: "positiivne
+# USD surprise -> XAUUSD SELL, negatiivne -> XAUUSD BUY" — see ON
+# TÄPSELT sama mehhanism, mis USD->EURUSD-l juba on (quote_currency=True
+# inversioon decide_direction()'is): agg>0 -> base_dir=+1 -> inverteeri
+# -> sell; agg<0 -> base_dir=-1 -> inverteeri -> buy. Ei vaja UUT
+# suunaloogikat, ainult UUT sihtmärki SAMA inversiooni jaoks.
+XAUUSD_TRIGGER_CURRENCY = "USD"
+XAUUSD_INSTRUMENT = "XAUUSD"
+XAUUSD_QUOTE_INVERTED = True
+
+
+def targets_for_currency(currency):
+    """
+    Tagastab list (instrument, quote_flag) sihtmärkidest antud valuuta
+    jaoks. 7 olemasolevat valuutat (EUR/GBP/JPY/CHF/AUD/CAD/NZD): TÄPSELT
+    1 sihtmärk, CURRENCY_MAP-ist, MUUTMATA. USD: KAKS sihtmärki —
+    olemasolev EURUSD (esimesena, "olemasolev käitumine muutmata") PLUSS
+    UUS XAUUSD (lisatud, mitte asendus). Tundmatu valuuta: tühi list.
+
+    Kutsuja (main_v4.py _newstick_process_group) proovib sihtmärke
+    järjekorras ja peatub esimese ÕNNESTUNUD tehingu peale (max 1
+    News-Tick positsioon kokku — vt kommentaar mujal).
+    """
+    targets = []
+    base = CURRENCY_MAP.get(currency)
+    if base is not None:
+        targets.append(base)
+    if currency == XAUUSD_TRIGGER_CURRENCY:
+        targets.append((XAUUSD_INSTRUMENT, XAUUSD_QUOTE_INVERTED))
+    return targets
+
+
 # Pip-suurus hinnaühikutes (24-pip SL kaugusesse teisendamiseks).
 PIP_SIZE = {
     "EURUSD": 0.0001,
@@ -86,6 +133,19 @@ PIP_SIZE = {
     "USDCHF": 0.0001,
     "USDCAD": 0.0001,
     "USDJPY": 0.01,
+    # XAUUSD (BSCV8 ADD XAUUSD): kullal EI OLE selles repos KUNAGI varem
+    # "pip" mõistet defineeritud — olemasolev kood kasutab kulla jaoks
+    # alati otse $-summat (grid_sl_usd, portfolio_max_loss_eur) või ATR-i,
+    # mitte pip'e (rule 6: "ÄRA eelda, et FX pip-size reegel sobib
+    # kullale"). Tuletatud olemasolevast hinnavorminduse konventsioonist:
+    # dashboard (index.html dec('g')=2) ja config.py INSTRUMENTS.XAUUSD
+    # kvoteerivad kulla LÄBIVALT 2 komakohaga -> MT5 point=0.01.
+    # Kõigil ülal olevatel FX ridadel kehtib SAMA suhe pip = 10 x point
+    # (5-kohaline FX point=0.00001 -> pip=0.0001; USDJPY 3-kohaline
+    # point=0.001 -> pip=0.01) — see EI OLE FX 0.0001 väärtuse pime
+    # ülekandmine kullale, vaid SAMA olemasoleva suhte rakendamine
+    # kulla enda point'i peale: 0.01 x 10 = 0.10.
+    "XAUUSD": 0.10,
 }
 
 Z_THRESHOLD = 1.0
@@ -194,7 +254,16 @@ def pip_value_usd(instrument, mid_price):
     juba niikuinii küsitakse) — mitte staatilist ligikaudset kurssi.
     See väldib staatilise JPY/CHF/CAD kursi ligikaudistuse, mida
     algselt kaaluti.
+
+    XAUUSD (BSCV8 ADD XAUUSD): standardne lot = 100 troiunssi, kvoteeritud
+    OTSE $-des (nagu EURUSD-tüüpi paarid) — EI VAJA valuutateisendust ega
+    100 000-kontrahinna eeldust. 100.0 on SAMA väärtus, mis config.py
+    INSTRUMENTS["XAUUSD"]["pip_value"] ja GRID_CONFIG["portfolio_legs"]
+    XAUUSD jala "pip_value" juba kasutavad — mitte uus arv, olemasoleva
+    konventsiooni taaskasutus.
     """
+    if instrument == "XAUUSD":
+        return 100.0
     if instrument in ("USDJPY", "USDCHF", "USDCAD"):
         if not mid_price or mid_price <= 0:
             return None
