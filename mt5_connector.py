@@ -125,6 +125,25 @@ def get_price_ctrader(symbol_td):
     return round((tick.bid + tick.ask) / 2, 5)
 
 
+def get_bid_ask(symbol_name):
+    """
+    Tagasta hetke (bid, ask) paar — erinevalt get_price_ctrader()'ist
+    (mis tagastab ainult keskmise), vajab BENEDICTUS NEWS-TICK v1
+    täitmine PÄRIS bid/ask'i (BUY täidetakse ASK'iga, SELL BID'iga).
+
+    Tagastab (bid, ask) või (None, None), kui ühendust/tick'i pole —
+    kutsuja peab None korral käituma nagu "hind puudub", mitte kasutama 0.0.
+    """
+    if not is_connected():
+        return None, None
+    sym = _SYMBOL_MAP.get(symbol_name, symbol_name.replace("/", ""))
+    tick = _mt5_call(mt5.symbol_info_tick, sym)
+    if tick is None:
+        logger.error(f"MT5 tick puudub: {sym}")
+        return None, None
+    return float(tick.bid), float(tick.ask)
+
+
 def get_candles(symbol_td, interval="1h", count=100):
     """
     Tagasta ajaloolised küünlad DataFramena.

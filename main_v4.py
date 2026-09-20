@@ -8,15 +8,17 @@ Strateegiad:
 """
 from dotenv import load_dotenv
 load_dotenv()
-import sys, os, json, time, logging, requests
+import sys, os, json, time, logging, requests, threading
 from datetime import datetime, timezone
 import pandas as pd
 import numpy as np
 
-from config import INSTRUMENTS, MEANREV_CONFIG, GRID_CONFIG
+from config import INSTRUMENTS, MEANREV_CONFIG, GRID_CONFIG, NEWS_TICK_ENABLED, NEWS_TICK_CONFIG
 from strategy_meanrev import MeanRevStrategy
 import gold_logic
 import mt5_connector as ct
+import newstick_engine as ne
+import oanor_client as oc
 
 # ── Env vars ─────────────────────────────────────────────
 SUPABASE_URL     = os.environ.get("SUPABASE_URL", "")
@@ -1727,6 +1729,251 @@ def sb_delete(table, params):
         return False
 
 # ─────────────────────────────────────────────────────────
+#  BENEDICTUS NEWS-TICK v1 (20 Sept 2026)
+# ─────────────────────────────────────────────────────────
+# Makro-uudiste surprise-strateegia, TÄIELIKULT eraldi lõim (vt main()
+# lõpuosa) — ei jaga SCAN_INTERVAL't, ei mõjuta gold/meanrev/portfolio
+# loogikat. Lülitub sisse/välja AINULT config.NEWS_TICK_ENABLED kaudu
+# (vt config.py kommentaari selle kohta, miks see lipp on vaikimisi False).
+
+def get_newstick_state_t():
+    """(ok, dict) — dict: 'errors' {'riik|indikaator': [vead,...]},
+    'processed' [event_key,...]. Fail-closed nagu get_circuit_state_t()."""
+    ok, rows = sb_select_t("bot_state", "id=eq.1&select=risk")
+    if not ok:
+        return False, {}
+    risk = (rows[0].get("risk") or {}) if rows else {}
+    st = risk.get("newstick") or {}
+    return True, {"errors": st.get("errors", {}), "processed": st.get("processed", [])}
+
+
+def save_newstick_state(state):
+    """Sama fail-closed + trading_disabled-säilitav muster, mis
+    save_circuit_state()'il (vt selle docstringi ajaloolise vea kohta —
+    siin korratakse TEADLIKULT sama kaitset, mitte vana viga)."""
+    try:
+        ok, rows = sb_select_t("bot_state", "id=eq.1&select=risk")
+        if not ok:
+            logger.warning("save_newstick_state: bot_state lugemine ebaonnestus — ei kirjuta midagi")
+            return
+        risk = (rows[0].get("risk") or {}) if rows else {}
+        hadapidur = risk.get("trading_disabled")
+        risk["newstick"] = state
+        if hadapidur:
+            risk["trading_disabled"] = hadapidur
+        sb_upsert("bot_state", {"id": 1, "risk": risk})
+    except Exception as e:
+        logger.error(f"save_newstick_state: {e}")
+
+
+def _newstick_any_open_position():
+    """Max 1 News-Tick positsioon KONTOL KOKKU — MIS TAHES olemasolev
+    lahtine positsioon (News-Tick enda, kulla grid, portfelli jalg,
+    käsitsi avatud) blokeerib uue News-Tick tehingu. Fail-closed: kui
+    lugemine ebaõnnestub, ei tea me, kas positsioon on lahti -> ei kaubelda."""
+    ok, positions = ct.get_all_positions_t()
+    if not ok:
+        return True, "positsioonide lugemine ebaõnnestus (fail-closed)"
+    if positions:
+        return True, f"{len(positions)} olemasolev(at) positsiooni kontol"
+    return False, None
+
+
+def _newstick_process_group(rows, state):
+    """
+    Töötle KÕIK sama valuuta+minuti Tier1 sündmused korraga (vt
+    newstick_engine.group_by_currency_minute). Muudab `state`
+    ('errors'/'processed') IN-PLACE. Tagastab True, kui tehing avati.
+    """
+    event_keys = [ne.event_dedup_key(r["date"], r["time_gmt"], r["country"], r["indicator"])
+                  for r in rows]
+    if all(k in state["processed"] for k in event_keys):
+        return False
+
+    usable = []
+    for r, key in zip(rows, event_keys):
+        if key in state["processed"]:
+            continue
+        if r["skip_reason"]:
+            add_log(f"[NEWS-TICK SKIP] {r['indicator']} {r['country']}: {r['skip_reason']}")
+            continue
+        if r["actual"] is None:
+            add_log(f"[NEWS-TICK SKIP] {r['indicator']} {r['country']}: no actual")
+            continue
+        err_key = f"{r['country']}|{r['indicator']}"
+        history = state["errors"].get(err_key, [])
+        z = ne.compute_z(r["actual"], r["consensus"], history)
+        state["errors"][err_key] = ne.update_error_history(history, r["actual"], r["consensus"])
+        if z is None:
+            add_log(f"[NEWS-TICK SKIP] {r['indicator']} {r['country']}: below z threshold "
+                    f"(insufficient error history or SD=0)")
+            continue
+        usable.append({"indicator": r["indicator"], "z": z, "row": r})
+
+    # KÕIK selle grupi event'id lähevad processed'iks (kasutatud VÕI
+    # lõplikult skip'itud) — Oanor tagastab sama nädala andmeid korduvalt,
+    # ilma selleta töödeldaks sama sündmust igal poll'il uuesti.
+    for key in event_keys:
+        if key not in state["processed"]:
+            state["processed"].append(key)
+    state["processed"] = state["processed"][-500:]
+
+    if not usable:
+        return False
+
+    agg, n_used = ne.aggregate_zscores(usable)
+    currency = rows[0]["currency"]
+    instrument, quote = ne.instrument_for_currency(currency)
+    if instrument is None:
+        add_log(f"[NEWS-TICK SKIP] {currency}: unmapped currency")
+        return False
+
+    direction = ne.decide_direction(agg, quote)
+    if direction is None:
+        add_log(f"[NEWS-TICK SKIP] {currency} @ {rows[0]['time_gmt']}: below z threshold "
+                f"(agg={agg:.3f}, n={n_used})")
+        return False
+
+    ok_trade, pohjus = kauplemine_lubatud()
+    if not ok_trade:
+        add_log(f"[NEWS-TICK SKIP] {currency}: trading disabled ({pohjus})")
+        return False
+
+    has_pos, pos_reason = _newstick_any_open_position()
+    if has_pos:
+        add_log(f"[NEWS-TICK SKIP] {currency}: existing position ({pos_reason})")
+        return False
+
+    bid, ask = ct.get_bid_ask(instrument)
+    if bid is None or ask is None:
+        add_log(f"[NEWS-TICK SKIP] {instrument}: symbol unavailable (no bid/ask)")
+        return False
+
+    mid = (bid + ask) / 2
+    sl_dist = ne.sl_distance_price(instrument)
+    pip_val = ne.pip_value_usd(instrument, mid)
+    balance = get_balance()
+    lot = ne.risk_based_lot(balance, sl_dist, pip_val,
+                             risk_pct=NEWS_TICK_CONFIG["risk_pct"],
+                             min_lot=NEWS_TICK_CONFIG["min_lot"],
+                             max_lot=NEWS_TICK_CONFIG["max_lot"])
+    if not lot or lot <= 0:
+        add_log(f"[NEWS-TICK SKIP] {instrument}: invalid sizing")
+        return False
+
+    entry_price = ask if direction == "buy" else bid
+    sl = round(entry_price - sl_dist, 5) if direction == "buy" else round(entry_price + sl_dist, 5)
+
+    indicators_str = ", ".join(
+        f"{u['indicator']}={u['row']['actual']}/{u['row']['consensus']} z={u['z']:.2f}" for u in usable)
+    add_log(f"[NEWS-TICK ENTRY] {currency} @ {rows[0]['time_gmt']} [{indicators_str}] agg={agg:.3f} "
+            f"-> {direction} {instrument} lot={lot} bid={bid} ask={ask} sl={sl}")
+
+    entry_attempt_time = datetime.now(timezone.utc)
+    try:
+        result = ct.place_order(direction, instrument, lot, sl=sl)
+    except Exception as e:
+        add_log(f"[NEWS-TICK ERROR] place_order erind — outcome UNKNOWN, ei korrata: {e}")
+        return True
+    if result.get("unknown"):
+        add_log(f"[NEWS-TICK ERROR] order outcome UNKNOWN — ei korrata, jäetakse rekontsileerimisele: "
+                f"{result.get('error')}")
+        return True
+    if "error" in result:
+        add_log(f"[NEWS-TICK ERROR] order tagasi lükatud: {result['error']}")
+        return False
+
+    ticket = result.get("orderId")
+    fill_price = result.get("price")
+    exec_latency_ms = int((datetime.now(timezone.utc) - entry_attempt_time).total_seconds() * 1000)
+    add_log(f"[NEWS-TICK ENTRY] täidetud: ticket={ticket} price={fill_price} "
+            f"execution_latency_ms={exec_latency_ms}")
+
+    def _delayed_exit():
+        time.sleep(NEWS_TICK_CONFIG["hold_seconds"])
+        try:
+            closed = ct.close_position(ticket)
+        except Exception as e:
+            add_log(f"[NEWS-TICK ERROR] exit outcome UNKNOWN (erind) ticket={ticket}: {e} "
+                    f"— ei korrata, jäetakse rekontsileerimisele")
+            return
+        if closed:
+            pnl_info = ct.get_closed_deal_pnl(ticket)
+            pnl = pnl_info["pnl"] if pnl_info else None
+            add_log(f"[NEWS-TICK EXIT] ticket={ticket} suletud, P&L={pnl}")
+        else:
+            add_log(f"[NEWS-TICK ERROR] exit outcome ambiguous (close_position=False) ticket={ticket} "
+                    f"— ei korrata, jäetakse rekontsileerimisele")
+
+    threading.Thread(target=_delayed_exit, daemon=True).start()
+    return True
+
+
+def run_newstick_event_loop():
+    """
+    BENEDICTUS NEWS-TICK v1 sündmuste jälgimise lõim.
+
+    EI JAGA SCAN_INTERVAL't olemasoleva while True skaneerimisega — oma
+    tempoga lõim. Vaikimisi (jõude) pollib harva, plaanitud Tier1
+    avaldamise lähedal pollib tihedalt, siis läheb tagasi jõude (ei jää
+    lõputult tihedalt pollima pärast sündmuse lahenemist).
+
+    Oanor HTTP kutse EI HOIA kunagi _MT5_LOCK'i — see lõim ei tee ise
+    ühtegi otsest mt5.* kutset, ainult ct.* wrapperite kaudu (need
+    võtavad luku ise, ainult MT5 kutse enda ajaks, vt mt5_connector.py
+    _mt5_call()).
+    """
+    add_log("[NEWS-TICK] event loop lõim käivitus")
+    if not oc.get_api_key():
+        add_log("[NEWS-TICK ERROR] OANOR_API_KEY puudub — lõim ei tee midagi (fail-closed)")
+        return
+
+    while True:
+        try:
+            ok, state = get_newstick_state_t()
+            if not ok:
+                add_log("[NEWS-TICK ERROR] olekut ei saanud lugeda — tsükkel vahele jäetud (fail-closed)")
+                time.sleep(NEWS_TICK_CONFIG["poll_interval_idle_s"])
+                continue
+
+            resp = oc.fetch_week()
+            if not resp["ok"]:
+                add_log(f"[NEWS-TICK ERROR] Oanor fetch ebaõnnestus: {resp['error']}")
+                time.sleep(NEWS_TICK_CONFIG["poll_interval_idle_s"])
+                continue
+
+            now = datetime.now(timezone.utc)
+            rows = oc.filter_tier1_events(resp["events"])
+
+            # ── lähedal-avaldamise tuvastus, et otsustada poll-tempo ──
+            near_release = False
+            for r in rows:
+                t = ne.scheduled_utc(r.get("date"), r.get("time_gmt"))
+                if t is None:
+                    continue
+                delta = (t - now).total_seconds()
+                if -NEWS_TICK_CONFIG["poll_window_s"] <= delta <= NEWS_TICK_CONFIG["poll_lead_s"]:
+                    near_release = True
+                    break
+
+            # ── grupeeri sama valuuta+minut, mille actual on juba olemas ──
+            published = [r for r in rows if r["actual"] is not None]
+            groups = ne.group_by_currency_minute(published)
+            for _, group_rows in groups.items():
+                _newstick_process_group(group_rows, state)
+
+            if groups:
+                save_newstick_state(state)
+
+            time.sleep(NEWS_TICK_CONFIG["poll_interval_active_s"] if near_release
+                       else NEWS_TICK_CONFIG["poll_interval_idle_s"])
+        except Exception as e:
+            add_log(f"[NEWS-TICK ERROR] event loop erind: {e}")
+            logger.exception(e)
+            time.sleep(NEWS_TICK_CONFIG["poll_interval_idle_s"])
+
+
+# ─────────────────────────────────────────────────────────
 #  MAIN LOOP
 # ─────────────────────────────────────────────────────────
 
@@ -1770,6 +2017,13 @@ def main():
                 get_balance=get_balance,
             )
             add_log(f"✅ {symbol} mean reversion strateegia valmis")
+
+    # ── BENEDICTUS NEWS-TICK v1 ──
+    # Eraldi lõim, gate'itud AINULT config.NEWS_TICK_ENABLED kaudu — ei
+    # puuduta SCAN_INTERVAL't ega ülalolevat mr_strategies/gold loogikat.
+    add_log(f"📰 News-Tick: {'ON' if NEWS_TICK_ENABLED else 'OFF (config.NEWS_TICK_ENABLED=False)'}")
+    if NEWS_TICK_ENABLED:
+        threading.Thread(target=run_newstick_event_loop, daemon=True).start()
 
     scan_count = 0
 

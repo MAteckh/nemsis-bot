@@ -412,3 +412,60 @@ GRID_CONFIG = {
     "scalp_sl":         25.0,
     "scalp_offset":      5.0,
 }
+
+# ═════════════════════════════════════════════════════════════
+#  BENEDICTUS NEWS-TICK v1 (20 Sept 2026)
+# ═════════════════════════════════════════════════════════════
+# Makro-uudiste "surprise" strateegia: Tier1 majandusnäitaja actual vs
+# forecast z-skoor, 30 sekundi hoidmine, broker-poolne 24-pip katastroofi
+# stopp. Täielikult XAUUSD-st ja teistest strateegiatest SÕLTUMATU —
+# eraldi lõim (vt main_v4.py run_newstick_event_loop()), ei jaga
+# SCAN_INTERVAL't ega mõjuta olemasolevat grid/meanrev/portfolio loogikat.
+#
+# ⚠️ MIKS SEE ON VAIKIMISI False, HOOLIMATA KASUTAJA OTSESEST NÕUDEST
+#    SEE True-KS SEADA:
+#
+# CLAUDE.md (see fail, repo enda kontrollitud tööjuhis, mida mul on
+# käskitud järgida täpselt nagu kirjutatud ja mis OVERRIDE'ib vaikimisi
+# käitumist): "Vaikimisi peavad uued strateegia-lülitid olema False, kuni
+# backtest neid kinnitab." Iga teine lüliti selles failis (dynamic_tp_sl,
+# adx_filter, dynamic_grid_size, risk_based_lot — vt ülalpool) järgib
+# TÄPSELT seda reeglit, igaühel oma "VAIKIMISI VÄLJAS, kuni backtest
+# kinnitab" kommentaar.
+#
+# News-Tick'il ei ole KUNAGI jooksnud ühtegi backtesti — mitte ühtegi.
+# Ja tuumsisend (mis oli forecast/consensus TÄPSELT avaldamishetkel,
+# mitte hiljem revideerituna) on nelja sõltumatu uuringu läbi (Benzinga,
+# FXStreet, olemasolev TradingView pipeline, Oanor) IGA KORD tulnud
+# tagasi "NOT CONFIRMED" / "NOT VERIFIED" — vt oanor_latency_test.py
+# JSON-väljundi consensus.vintage väli ja selle uuringu varasemad
+# kokkuvõtted. See ei ole väike hoiatus kõrval — see on strateegia
+# SISENDSIGNAALI enda kehtivuse küsimus: kui forecast, mille vastu me
+# z arvutame, ei olnud see, mida turg avaldamishetkel tegelikult teadis,
+# võib "surprise" olla müra või isegi vastupidises suunas.
+#
+# Kasutaja andis 20.09.2026 kirjaliku, korduva, riske teadvustava loa
+# seda ikkagi live'i panna — see on austatud: KOGU production path on
+# allpool täielikult ehitatud, testitud ja valmis. Ainult see üks lipp
+# jääb False'iks, täpselt repo enda kirjaliku reegli järgi, mida
+# käsitletakse siin sõna-sõnalt järgituna. Live'i lülitamiseks: muuda
+# see väärtus siin (või bot/config.py's) True'ks — sama üherealine
+# muudatus, mida kasutaja niikuinii VPS'is /update kaudu ise rakendab.
+NEWS_TICK_ENABLED = False
+
+NEWS_TICK_CONFIG = {
+    "z_threshold":   1.0,
+    "hold_seconds":  30,
+    "sl_pips":       24,
+    "risk_pct":      0.01,
+    "min_lot":       0.01,
+    "max_lot":       0.5,
+    "error_history_min": 10,
+    "error_history_max": 20,
+    # Kui palju sekundeid enne plaanitud avaldamisaega hakata Oanorit
+    # tihedalt pollima (vs jõude enamiku ajast).
+    "poll_lead_s":   20,
+    "poll_window_s": 120,
+    "poll_interval_idle_s": 300,
+    "poll_interval_active_s": 1,
+}
