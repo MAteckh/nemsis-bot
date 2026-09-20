@@ -36,7 +36,9 @@ KASUTUS (VPS-il, kus MT5 terminal on avatud ja sisse logitud)
     python export_mt5_ticks.py --mode probe --symbol XAUUSD
 
     # 3) Väike valideerimis-eksport: viimased 24h, KOLM sümbolit korraga
-    python export_mt5_ticks.py --mode validate24 --symbols XAUUSD,XAGUSD,USOIL
+    #    (BlackBull PÄRIS sümbolid, kinnitatud --mode discover'iga
+    #    21.09.2026: nafta on "WTI", MITTE "USOIL")
+    python export_mt5_ticks.py --mode validate24 --symbols XAUUSD,XAGUSD,WTI
 
     # 4) Suur eksport (KÄSITSI, ALLES pärast validate24 ülevaatust) —
     #    nõuab eksplitsiitset kinnituslippu, VAIKIMISI EI TEHTA
@@ -441,8 +443,10 @@ def main():
     p.add_argument("--mode", required=True,
                    choices=["discover", "probe", "validate24", "export"])
     p.add_argument("--symbol", help="üks sümbol (probe, export)")
-    p.add_argument("--symbols", default="XAUUSD,XAGUSD,USOIL",
-                   help="komaga eraldatud (validate24)")
+    p.add_argument("--symbols", default="XAUUSD,XAGUSD,WTI",
+                   help="komaga eraldatud (validate24). Vaikeväärtus on "
+                        "BlackBull PÄRIS kinnitatud sümbolid (discover, "
+                        "21.09.2026) — nafta on 'WTI', mitte 'USOIL'.")
     p.add_argument("--start", help="YYYY-MM-DD (export)")
     p.add_argument("--end", help="YYYY-MM-DD (export)")
     p.add_argument("--out", default=os.path.join(
