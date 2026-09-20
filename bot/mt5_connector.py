@@ -211,7 +211,7 @@ def place_order(direction, symbol_name, lot, tp=None, sl=None):
         "price":    price,
         "deviation": 20,
         "magic":    MAGIC,
-        "comment":  "NEMSIS_v4",
+        "comment":  "BSCV8",
         "type_time": mt5.ORDER_TIME_GTC,
         "type_filling": mt5.ORDER_FILLING_IOC,
     }
@@ -303,7 +303,7 @@ def close_position(ticket):
         "price":     price,
         "deviation": 20,
         "magic":     MAGIC,
-        "comment":   "NEMSIS_v4_close",
+        "comment":   "BSCV8_close",
         "type_time": mt5.ORDER_TIME_GTC,
         "type_filling": mt5.ORDER_FILLING_IOC,
     }

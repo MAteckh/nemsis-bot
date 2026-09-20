@@ -78,14 +78,69 @@ def is_tier1(event_name):
     return event_name in _TIER1_SET if event_name else False
 
 
+def flatten_week_days(payload):
+    """
+    Oanori /v1/week PÄRIS vastuseskeem (kinnitatud otse Oanori enda avaliku
+    llms.txt dokumentatsiooni vastu, 21.09.2026 — mitte oletus):
+
+        {
+          "data": {
+            "start": "...", "end": "...", "total_events": N,
+            "days": [
+              {"date": "2026-06-08", "count": 1, "events": [
+                  {"event": "...", "actual": ..., "country": "...",
+                   "previous": ..., "time_gmt": "...", "consensus": ...,
+                   "description": "..."},
+                  ...
+              ]},
+              ...
+            ]
+          },
+          "meta": {...}, "status": "ok", "message": "...", "success": true
+        }
+
+    Iga event OBJEKT SEES ei sisalda oma 'date' välja — kuupäev tuleb
+    AINULT ümbritsevalt päeva-objektilt ("days"[i]["date"]). Varasem
+    parser eeldas, et payload["data"] ON otse list VÕI et payload["events"]
+    on olemas — kumbki polnud õige, mistõttu iga live-kutse ebaõnnestus
+    veaga "ootamatu vastuse skeem — 'data'/'events' puudub".
+
+    Tagastab (events: list[dict] | None, error: str | None). events'is on
+    IGA event'i sees juba 'date' väli (laenatud oma päeva-objektilt),
+    pluss kõik Oanori enda väljad muutmata kujul.
+    """
+    if not isinstance(payload, dict):
+        return None, "ootamatu vastuse skeem — vastus ei ole JSON-objekt"
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        return None, "ootamatu vastuse skeem — 'data' puudub"
+    days = data.get("days")
+    if not isinstance(days, list):
+        return None, "ootamatu vastuse skeem — 'data.days' puudub"
+
+    flat = []
+    for day in days:
+        if not isinstance(day, dict):
+            continue
+        date_str = day.get("date")
+        for ev in day.get("events") or []:
+            if not isinstance(ev, dict):
+                continue
+            row = dict(ev)
+            row["date"] = date_str
+            flat.append(row)
+    return flat, None
+
+
 def fetch_week(timeout_s=10):
     """
     GET /v1/week. Tagastab dict:
       {"ok": bool, "events": list[dict], "status": int|None, "error": str|None}
 
-    events on FILTREERIMATA toorandmed (kõik väljad, mis Oanor tagastab) —
-    filtreerimine (Tier1, valuuta, puuduv consensus/actual) toimub
-    filter_tier1_events()'is, et see oleks eraldi testitav ilma võrguta.
+    events on FILTREERIMATA toorandmed, KÕIGI päevade "days"[].events[]
+    kokku liidetuna üheks listiks (vt flatten_week_days()) — filtreerimine
+    (Tier1, valuuta, puuduv consensus/actual) toimub filter_tier1_events()'is,
+    et see oleks eraldi testitav ilma võrguta.
 
     EI TÕSTA erindit kunagi — võrguviga on kutsuja jaoks "ei saanud
     andmeid", mitte crash.
@@ -109,14 +164,9 @@ def fetch_week(timeout_s=10):
         return {"ok": False, "events": [], "status": r.status_code,
                 "error": redact(f"vigane JSON: {e}", [key])}
 
-    events = payload.get("data") if isinstance(payload, dict) else None
-    if events is None and isinstance(payload, dict):
-        events = payload.get("events")
-    if events is None and isinstance(payload, list):
-        events = payload
-    if not isinstance(events, list):
-        return {"ok": False, "events": [], "status": r.status_code,
-                "error": "ootamatu vastuse skeem — 'data'/'events' puudub"}
+    events, err = flatten_week_days(payload)
+    if err is not None:
+        return {"ok": False, "events": [], "status": r.status_code, "error": err}
     return {"ok": True, "events": events, "status": r.status_code, "error": None}
 
 

@@ -952,7 +952,7 @@ def send_grid_signals(center, trend, gs, tp_dist, sl_dist, lot):
     Kõik absoluuthinnad — kopeeri otse XTrend Price väljadesse.
     """
     gl = GRID_CONFIG["levels"]
-    lines = [f"🎯 <b>NEMSIS GRID — {trend.upper()}</b>", f"Kese: ${center:.2f} | Lot: {lot}", ""]
+    lines = [f"🎯 <b>BSCV8 GRID — {trend.upper()}</b>", f"Kese: ${center:.2f} | Lot: {lot}", ""]
 
     if trend == "bull":
         lines.append("<b>BUY LIMIT orderid</b> (kopeeri XTrend Price väljadesse):")
@@ -1978,7 +1978,7 @@ def run_newstick_event_loop():
 # ─────────────────────────────────────────────────────────
 
 def main():
-    add_log("🚀 NEMSIS v4 — Multi-Strategy Bot")
+    add_log("🚀 Benedictus Solar Crown V8 — Multi-Strategy Bot")
     add_log(f"📊 Instrumendid: {', '.join(k for k,v in INSTRUMENTS.items() if v['enabled'])}")
     add_log(f"🤖 Claude AI: {'ON' if ANTHROPIC_KEY else 'OFF'}")
 
@@ -1993,7 +1993,7 @@ def main():
         add_log("⚠️ MT5: ühendus ebaõnnestus — kontrolli VPS-i")
 
     send_telegram(
-        f"🚀 <b>NEMSIS v4 käivitus!</b>\n"
+        f"🚀 <b>Benedictus Solar Crown V8 käivitus!</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━\n"
         f"📊 Instrumendid: <b>{len([v for v in INSTRUMENTS.values() if v['enabled']])}</b>\n"
         f"🥇 Gold: Trend Grid\n"
@@ -2194,7 +2194,7 @@ def main():
                 stats = get_stats()
                 trend = _claude_cache.get("bias", "neutral")
                 send_telegram(
-                    f"🌅 <b>NEMSIS v4 Päevane kokkuvõte</b>\n"
+                    f"🌅 <b>Benedictus Solar Crown V8 Päevane kokkuvõte</b>\n"
                     f"━━━━━━━━━━━━━━━━━━━━━\n"
                     f"💼 Balance: <b>{balance:.2f}€</b>\n"
                     f"📈 Net P&L: <b>{stats['net_pnl']:+.2f}€</b>\n"
@@ -2216,7 +2216,7 @@ if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        send_telegram("⏹ <b>NEMSIS peatatud</b>\nKasutaja peatas boti käsitsi.")
+        send_telegram("⏹ <b>BSCV8 peatatud</b>\nKasutaja peatas boti käsitsi.")
     except Exception as e:
-        send_telegram(f"🚨 <b>NEMSIS CRASH</b>\nViga: {str(e)[:200]}\nBot on maas — palun taaskäivita!")
+        send_telegram(f"🚨 <b>BSCV8 CRASH</b>\nViga: {str(e)[:200]}\nBot on maas — palun taaskäivita!")
         raise
