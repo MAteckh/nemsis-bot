@@ -4,7 +4,17 @@ __pycache__/
 # Uuringuskriptid/testandmed (nt Oanor API-võtmega seotud testid) —
 # teadlikult EI kuulu live-boti repo versioonihaldusesse, nõutud
 # korduvalt selle sessiooni ülesannetes ("research/ EI lähe commit'i").
-research/
+# "research/*" (mitte "research/") on TEADLIK valik — Git EI luba
+# taaslisada faili, mille VANEMKAUST on tervikuna valistatud
+# ("research/" oleks blokeerinud allpool oleva erandi täielikult).
+research/*
+
+# erand: MT5 tick-eksportija on TEADLIKULT loe-ainult uurimistööriist
+# (BSCV8 — VPS EXPORTER DEPLOY, 21.09.2026) — kasutaja vajab seda
+# VPS-i töökataloogis, mis saab uut koodi AINULT git pull'iga, seega
+# see PEAB olema versioonihalduses, erinevalt teistest research/
+# failidest (mis sisaldavad nt Oanor API-võtmega seotud teste).
+!research/export_mt5_ticks.py
 
 # Ajaloolised hinnaandmed backtest.py jaoks — reaalsed broker/andmeteenuse
 # eksportid, ei kuulu koodi versioonihaldusesse (suured, muutuvad, isiklikud).
