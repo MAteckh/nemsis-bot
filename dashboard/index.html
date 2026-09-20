@@ -36,7 +36,7 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;z-index:0;
 
 /* ── glass card base ───────────────────────────────────── */
 .gcard{background:var(--glass);border:1px solid var(--border);border-radius:18px;position:relative;
-  backdrop-filter:blur(20px);overflow:hidden}
+  -webkit-backdrop-filter:blur(20px);backdrop-filter:blur(20px);overflow:hidden}
 .gcard::before{content:'';position:absolute;inset:0;border-radius:18px;padding:1px;pointer-events:none;
   background:linear-gradient(135deg,rgba(244,184,62,.25),transparent 40%,transparent 60%,rgba(79,195,255,.2));
   -webkit-mask:linear-gradient(#fff 0 0) content-box,linear-gradient(#fff 0 0);-webkit-mask-composite:xor;mask-composite:exclude}
@@ -46,8 +46,8 @@ nav{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-
 .brand{display:flex;align-items:center;gap:14px}
 .mark{position:relative;width:44px;height:44px;flex-shrink:0}
 .mark-glow{position:absolute;inset:-8px;border-radius:50%;background:radial-gradient(circle,var(--gold),transparent 70%);animation:pulse-glow 3.5s ease-in-out infinite}
-.mark-ring{position:absolute;inset:0;border-radius:50%;border:1.5px solid var(--goldline);animation:spin 14s linear infinite}
-.mark-ring2{position:absolute;inset:6px;border-radius:50%;border:1px dashed var(--blueline);animation:spin-r 10s linear infinite}
+.mark-ring{position:absolute;inset:0;border-radius:50%;border:1.5px solid var(--goldline);animation:spin 14s linear infinite;will-change:transform}
+.mark-ring2{position:absolute;inset:6px;border-radius:50%;border:1px dashed var(--blueline);animation:spin-r 10s linear infinite;will-change:transform}
 .mark-core{position:absolute;inset:8px;border-radius:50%;background:linear-gradient(150deg,#12172a,#1c2340);
   display:flex;align-items:center;justify-content:center;font-family:var(--fd);font-weight:700;font-size:16px;
   background-clip:text;-webkit-background-clip:text}
