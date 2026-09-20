@@ -2182,6 +2182,10 @@ def main():
                     "price":           round(price_gold if price_gold > 0 else 0, 2),
                     "mode":            "portfell" if GRID_CONFIG.get("portfolio_enabled") else GRID_CONFIG.get("strategy_mode", "grid"),
                     "instruments":     active_syms,
+                    # BSCV8 dashboard vajab seda, et News-Tick 7 FX-instrumendi
+                    # aktiivsust õigesti kajastada — need EI OLE active_syms/
+                    # portfolio_legs sees (News-Tick on neist eraldi lõim).
+                    "news_tick_enabled": NEWS_TICK_ENABLED,
                 }
             })
 

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
-<title>Benedictus · Autonoomne kauplemissüsteem</title>
+<title>Benedictus Solar Crown V8</title>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
@@ -183,9 +183,27 @@ footer{display:flex;justify-content:space-between;align-items:center;flex-wrap:w
   <div class="brand">
     <div class="mark">
       <div class="mark-glow"></div><div class="mark-ring"></div><div class="mark-ring2"></div>
-      <div class="mark-core"><span>B</span></div>
+      <div class="mark-core">
+        <svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true" focusable="false">
+          <defs>
+            <linearGradient id="scGrad" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0%" stop-color="#ffd47a"/>
+              <stop offset="100%" stop-color="#8fdcff"/>
+            </linearGradient>
+          </defs>
+          <g stroke="url(#scGrad)" stroke-width="1.6" stroke-linecap="round">
+            <line x1="12" y1="15" x2="12" y2="21"/>
+            <line x1="12" y1="15" x2="6" y2="19"/>
+            <line x1="12" y1="15" x2="18" y2="19"/>
+            <line x1="12" y1="15" x2="3" y2="14"/>
+            <line x1="12" y1="15" x2="21" y2="14"/>
+          </g>
+          <circle cx="12" cy="15" r="4.3" fill="url(#scGrad)"/>
+          <path d="M6 13 L6 7 L9.5 10 L12 4 L14.5 10 L18 7 L18 13 Z" fill="url(#scGrad)" stroke="#05070d" stroke-width="0.6" stroke-linejoin="round"/>
+        </svg>
+      </div>
     </div>
-    <div><div class="brand-name">Benedictus</div><div class="brand-sub">Autonoomne kauplemissüsteem · v4</div></div>
+    <div><div class="brand-name">Benedictus Solar Crown V8</div><div class="brand-sub">Autonoomne kauplemissüsteem · BSCV8</div></div>
   </div>
   <div class="navctl">
     <div class="pill"><div class="dotb"></div><span id="st">ÜHENDAN</span></div>
@@ -225,7 +243,7 @@ footer{display:flex;justify-content:space-between;align-items:center;flex-wrap:w
   </div>
 </div>
 
-<div class="shead"><div class="dotmark"></div><span class="txt">Instrumendi olek</span><div class="line"></div><span class="cnt" id="ic">1 / 1 aktiivne</span></div>
+<div class="shead"><div class="dotmark"></div><span class="txt">BSCV8 kaubeldavad turud</span><div class="line"></div><span class="cnt" id="ic">— / 8 aktiivne</span></div>
 <div class="instgrid" id="ig"></div>
 
 <div class="shead"><div class="dotmark"></div><span class="txt">Avatud positsioonid</span><div class="line"></div><span class="cnt" id="pc">0 avatud</span></div>
@@ -243,7 +261,7 @@ footer{display:flex;justify-content:space-between;align-items:center;flex-wrap:w
   </div>
 </div>
 
-<footer><span>Benedictus v4 · BlackBull Markets</span><span id="ft">—</span></footer>
+<footer><span>Benedictus Solar Crown V8 · BlackBull Markets</span><span id="ft">—</span></footer>
 </div>
 
 <div class="moverlay" id="mo">
@@ -263,14 +281,21 @@ const SB='https://xqinzjaqorjqaexeoyqc.supabase.co',KEY='sb_publishable_eGAHjERY
 // t:'f' = forex (5 kohta), t:'i' = indeks (2 kohta).
 // Mida bot PÄRISELT kaupleb, tuleb stats.instruments väljalt — see nimekiri
 // annab ainult ilusad nimed. Tundmatu sümbol kuvatakse ikka, vaikeväärtustega.
+// BSCV8 kaubeldavad turud — TÄPSELT 8, tegeliku konfiguratsiooniga
+// kooskõlas: XAUUSD = olemasolev grid/portfell-strateegia, ülejäänud 7 =
+// Benedictus News-Tick v1 (config.NEWS_TICK_ENABLED, vt bot_state.stats
+// .news_tick_enabled allpool). XAUUSD EI KUULU News-Tick'i.
 const I={
-  XAUUSD:{n:'XAU/USD',t:'g',tf:'1d',s:'Donchian 50'},
-  SPX:   {n:'S&P 500',t:'i',tf:'1d',s:'Bollinger fade'},
-  USDJPY:{n:'USD/JPY',t:'j',tf:'1d',s:'Donchian + EMA200'},
-  EURUSD:{n:'EUR/USD',t:'f',tf:'1d',s:'TS momentum'},
-  GBPUSD:{n:'GBP/USD',t:'f',tf:'1d',s:'TS momentum'},
-  XAGUSD:{n:'XAG/USD',t:'g',tf:'1d',s:'—'}
+  XAUUSD:{n:'XAU/USD',t:'g',tf:'1d',  s:'Donchian 50 (grid)'},
+  EURUSD:{n:'EUR/USD',t:'f',tf:'tick',s:'News-Tick'},
+  GBPUSD:{n:'GBP/USD',t:'f',tf:'tick',s:'News-Tick'},
+  USDJPY:{n:'USD/JPY',t:'j',tf:'tick',s:'News-Tick'},
+  USDCHF:{n:'USD/CHF',t:'f',tf:'tick',s:'News-Tick'},
+  AUDUSD:{n:'AUD/USD',t:'f',tf:'tick',s:'News-Tick'},
+  USDCAD:{n:'USD/CAD',t:'f',tf:'tick',s:'News-Tick'},
+  NZDUSD:{n:'NZD/USD',t:'f',tf:'tick',s:'News-Tick'}
 }
+const NEWSTICK_FX=['EURUSD','GBPUSD','USDJPY','USDCHF','AUDUSD','USDCAD','NZDUSD']
 const DEF={n:'',t:'f',tf:'1d',s:'—'}
 // f = forex 5 kohta, j = JPY-paar 3 kohta, g/i = kuld/indeks 2 kohta
 const dec=t=>t==='f'?5:t==='j'?3:2
@@ -339,10 +364,20 @@ async function load(){
       :(p.session||'').startsWith('pf_')?p.session.slice(3)
       :p.session==='core'||p.session==='overlay'?'XAUUSD'
       :(p.session||'—')
-    const active=(st.instruments&&st.instruments.length?st.instruments:Object.keys(I))
+    // Tegelik konfiguratsioon, mitte oletus: XAUUSD aktiivsus tuleb
+    // stats.instruments'ist (nagu varem), News-Tick 7 FX-paari aktiivsus
+    // tuleb ERALDI stats.news_tick_enabled lipust (config.NEWS_TICK_ENABLED,
+    // main_v4.py kirjutab selle igal skannil). Kumbki EI OLE tuletatud
+    // teisest — dashboard ei tohi kuvada instrumenti aktiivsena, kui bot
+    // sellega tegelikult ei tööta.
+    const goldSyms=(st.instruments&&st.instruments.length?st.instruments:['XAUUSD'])
+    const newsTickOn=!!st.news_tick_enabled
+    const isActive=sym=>sym==='XAUUSD'?goldSyms.includes('XAUUSD'):(newsTickOn&&NEWSTICK_FX.includes(sym))
+    const allSyms=Object.keys(I)
+    const active=allSyms.filter(isActive)
     document.getElementById('gp').textContent=allpos.length
     document.getElementById('pc').textContent=allpos.length+' avatud'
-    document.getElementById('ic').textContent=active.length+' / '+active.length+' aktiivne'
+    document.getElementById('ic').textContent=active.length+' / '+allSyms.length+' aktiivne'
     const bias=st.claude_bias||'neutral'
     const biasEt=bias==='buy'?'Ostuseis':bias==='sell'?'Müügiseis':'Neutraalne'
     document.getElementById('ab').textContent='Turu lugemine · '+biasEt
@@ -360,14 +395,12 @@ async function load(){
       stEl.style.color='var(--red)'
     }
 
-    document.getElementById('ig').innerHTML=active.map(sym=>{
+    document.getElementById('ig').innerHTML=allSyms.map(sym=>{
       const info=I[sym]||{...DEF,n:sym}
-      const isG=sym==='XAUUSD',sp=allpos.filter(p=>symOf(p)===sym).length
+      const isG=sym==='XAUUSD',on=isActive(sym),sp=allpos.filter(p=>symOf(p)===sym).length
       const price=isG&&gp?'$'+gp.toFixed(2):'—'
-      const trend=isG?(st.trend||'neutral'):'ranging'
-      const bc=trend==='bull'?'bull':trend==='bear'?'bear':trend==='ranging'?'rng':'neu'
-      const trendEt=trend==='bull'?'TÕUSUTREND':trend==='bear'?'LANGUSTREND':trend==='ranging'?'KÜLGSUUNAS':'NEUTRAALNE'
-      return`<div class="gcard ichip"><div class="ichip-top"><div class="iname">${info.n}</div><span class="badge ${bc}">${trendEt}</span></div><div class="istrat">${info.s} · ${info.tf}</div><div class="iprice">${price}</div><div class="ifoot"><span>POS</span><strong style="color:var(--green)">${sp}</strong></div></div>`
+      const trendEt=isG&&on?(st.trend==='bull'?' · TÕUSUTREND':st.trend==='bear'?' · LANGUSTREND':' · NEUTRAALNE'):''
+      return`<div class="gcard ichip"><div class="ichip-top"><div class="iname">${info.n}</div><span class="badge ${on?'bull':'neu'}">${on?'AKTIIVNE':'INAKTIIVNE'}</span></div><div class="istrat">${info.s} · ${info.tf}${trendEt}</div><div class="iprice">${price}</div><div class="ifoot"><span>POS</span><strong style="color:${sp?'var(--green)':'var(--text3)'}">${sp}</strong></div></div>`
     }).join('')
 
     const pb=document.getElementById('pb')
