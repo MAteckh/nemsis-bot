@@ -1916,17 +1916,20 @@ def _newstick_process_group(rows, state):
     newstick_engine.group_by_currency_minute). Muudab `state`
     ('errors'/'processed') IN-PLACE. Tagastab True, kui tehing avati.
 
-    BSCV8 ADD XAUUSD (21.09.2026): valuuta võib kaarduda ÜHELE VÕI
-    KAHELE sihtmärk-instrumendile (vt ne.targets_for_currency — USD
-    kaardub nii EURUSD'ile KUI KA XAUUSD'ile, ülejäänud 7 valuutat
-    TÄPSELT ühele, muutmata). Sihtmärke proovitakse JÄRJEKORRAS ja
-    peatutakse esimese, mis "tarbib ära" selle grupi (vt
-    _newstick_attempt_target) — see on TÕLGENDUSVALIK ambivalentse
-    "kumb, kui mõlemad kõlbaksid" küsimuse jaoks (spec ei täpsustanud
-    prioriteeti): EURUSD (olemasolev, muutmata käitumine) proovitakse
-    ENNE XAUUSD'i (lisatud), et 7 olemasoleva instrumendi käitumine
-    jääks TÄPSELT samaks kui enne seda muudatust. Dokumenteeritud ka
-    lõpuraportis.
+    BSCV8 ADD XAUUSD (21.09.2026) + BSCV8 FINALIZE XAUUSD PRIORITY
+    (21.09.2026, hilisem): valuuta võib kaarduda ÜHELE VÕI KAHELE
+    sihtmärk-instrumendile (vt ne.targets_for_currency — USD kaardub
+    NII XAUUSD'ile KUI KA EURUSD'ile, ülejäänud 7 valuutat TÄPSELT
+    ühele, muutmata). Sihtmärke proovitakse JÄRJEKORRAS ja peatutakse
+    esimese, mis "tarbib ära" selle grupi (vt _newstick_attempt_target).
+
+    USD jaoks on järjekord XAUUSD (PRIMARY) ENNE EURUSD (FALLBACK) —
+    kasutaja eksplitsiitne otsus (BSCV8 FINALIZE XAUUSD PRIORITY),
+    asendab varasema "EURUSD enne XAUUSD't" tõlgendusvaliku. EURUSD
+    saab tehingu ainult siis, kui XAUUSD katse ise mingil instrumendi-
+    spetsiifilisel põhjusel läbi ei lähe (hind puudub, vigane sizing,
+    broker lükkas tagasi) — mitte kunagi lihtsalt sellepärast, et
+    mõlemad oleksid võrdselt kõlblikud.
     """
     event_keys = [ne.event_dedup_key(r["date"], r["time_gmt"], r["country"], r["indicator"])
                   for r in rows]

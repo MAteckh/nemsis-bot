@@ -107,20 +107,29 @@ def targets_for_currency(currency):
     """
     Tagastab list (instrument, quote_flag) sihtmärkidest antud valuuta
     jaoks. 7 olemasolevat valuutat (EUR/GBP/JPY/CHF/AUD/CAD/NZD): TÄPSELT
-    1 sihtmärk, CURRENCY_MAP-ist, MUUTMATA. USD: KAKS sihtmärki —
-    olemasolev EURUSD (esimesena, "olemasolev käitumine muutmata") PLUSS
-    UUS XAUUSD (lisatud, mitte asendus). Tundmatu valuuta: tühi list.
+    1 sihtmärk, CURRENCY_MAP-ist, MUUTMATA. Tundmatu valuuta: tühi list.
+
+    USD: KAKS sihtmärki, XAUUSD ESIMESENA (PRIMARY), EURUSD TEISENA
+    (FALLBACK) — vt BSCV8 FINALIZE XAUUSD PRIORITY, 21.09.2026:
+        [("XAUUSD", True), ("EURUSD", True)]
+    Sama inversioon mõlemal (quote_currency=True), CURRENCY_MAP ise
+    ("USD" -> ("EURUSD", True)) jääb MUUTMATA — ainult järjekord, mille
+    alusel _newstick_process_group() sihtmärke proovib, on pööratud.
 
     Kutsuja (main_v4.py _newstick_process_group) proovib sihtmärke
     järjekorras ja peatub esimese ÕNNESTUNUD tehingu peale (max 1
-    News-Tick positsioon kokku — vt kommentaar mujal).
+    News-Tick positsioon kokku — vt kommentaar mujal). Seega XAUUSD saab
+    tehingu ALATI, kui see on kaubeldav (piisav bid/ask, sizing,
+    positsioon vaba) — EURUSD tuleb mängu ainult siis, kui XAUUSD
+    katse ise mingil põhjusel (instrumendi-spetsiifiline: hind puudub,
+    vigane sizing, broker lükkas order tagasi) läbi ei lähe.
     """
     targets = []
+    if currency == XAUUSD_TRIGGER_CURRENCY:
+        targets.append((XAUUSD_INSTRUMENT, XAUUSD_QUOTE_INVERTED))
     base = CURRENCY_MAP.get(currency)
     if base is not None:
         targets.append(base)
-    if currency == XAUUSD_TRIGGER_CURRENCY:
-        targets.append((XAUUSD_INSTRUMENT, XAUUSD_QUOTE_INVERTED))
     return targets
 
 
