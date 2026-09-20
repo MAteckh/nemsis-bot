@@ -372,15 +372,59 @@ def hinda_kvaliteeti(read):
     }
 
 
+def paeval_on_tick(symbol, paev):
+    """
+    Loe-ainult kontroll: kas SELLEL TÄPSELT piiritletud UTC kalendripäeval
+    on ÜKSKI PÄRIS tick. Kasutab copy_ticks_range (PIIRITLETUD vahemik),
+    MITTE copy_ticks_from(algus, count=1, ...) — viimane otsib EDASPIDI
+    esimest tick'it alates antud ajast ja annaks nädalavahetuse päevale
+    VALE "aktiivne" tulemuse, kui ta leiaks lihtsalt järgmise aktiivse
+    päeva (nt pühapäeva õhtu avanemise) esimese tick'i.
+    """
+    algus = datetime(paev.year, paev.month, paev.day, tzinfo=timezone.utc)
+    lopp = algus + timedelta(days=1)
+    ticks = mt5.copy_ticks_range(symbol, algus, lopp, mt5.COPY_TICKS_ALL)
+    return ticks is not None and len(ticks) > 0
+
+
+def leia_aktiivsed_paevad(symbol, n=2, max_tagasi=10, algusest=None):
+    """
+    PÄRIS MT5 tick-andmete põhjal (mitte kalendri-eeldusel — ei oletata
+    "reede 21:00 UTC" turusulgemist, sest see on broker/instrumendi-
+    spetsiifiline) kõnnib tagasiulatuvalt, kuni leiab `n` kõige värskemat
+    UTC kalendripäeva, millel on VÄHEMALT 1 tick.
+
+    Tagastab (aktiivsed_paevad: list[date], uusimast vanimani,
+    proovitud_paevad: list[(date, on_tick: bool)] — TÄIELIK diagnostika,
+    sh nädalavahetuse/püha päevad, mis vahele jäeti).
+    """
+    if algusest is None:
+        algusest = datetime.now(timezone.utc).date()
+    aktiivsed, proovitud = [], []
+    paev = algusest
+    for _ in range(max_tagasi):
+        on = paeval_on_tick(symbol, paev)
+        proovitud.append((paev, on))
+        if on:
+            aktiivsed.append(paev)
+            if len(aktiivsed) >= n:
+                break
+        paev -= timedelta(days=1)
+    return aktiivsed, proovitud
+
+
 def cmd_validate24(args):
     valjundi_kaust = args.out
     nyyd = datetime.now(timezone.utc)
-    tana = nyyd.date()
-    eile = tana - timedelta(days=1)
+    naiivne_tana = nyyd.date()
+    naiivne_eile = naiivne_tana - timedelta(days=1)
 
-    print(f"\n[VALIDATE24] Viimased 24h, sümbolid: {args.symbols}")
-    print(f"  UTC vahemik: {eile} .. {tana}  (kaks päevafaili, kuna copy_ticks_range "
-          f"jookseb UTC-kalendripäeva kaupa)")
+    print(f"\n[VALIDATE24] Sümbolid: {args.symbols}")
+    print(f"  Naiivne kalendriaken oleks olnud: {naiivne_eile} .. {naiivne_tana}")
+    print(f"  See VÕIB olla nädalavahetus/püha/turg-suletud — iga sümboli jaoks "
+          f"kontrollitakse PÄRIS tick-andmetega (copy_ticks_range), mitte "
+          f"kalendri-eeldusega, ja vajadusel otsitakse viimased aktiivsed "
+          f"kauplemispäevad tagasiulatuvalt (kuni {args.max_lookback_days} päeva).")
 
     kokkuvote = []
     for symbol in args.symbols.split(","):
@@ -388,19 +432,47 @@ def cmd_validate24(args):
         if not mt5.symbol_select(symbol, True):
             print(f"  ❌ {symbol}: symbol_select ebaõnnestus — jätan vahele")
             continue
+
         print(f"\n  --- {symbol} ---")
-        for paev in (eile, tana):
+        aktiivsed, proovitud = leia_aktiivsed_paevad(
+            symbol, n=2, max_tagasi=args.max_lookback_days, algusest=naiivne_tana)
+        for p, on in proovitud:
+            print(f"    sondeering {p}: "
+                  + ("tick(id) leitud" if on else "TÜHI (nädalavahetus/püha/turg suletud VÕI andmeid pole)"))
+
+        if not aktiivsed:
+            print(f"  ❌ {symbol}: EI LEITUD ÜHTEGI tick'iga UTC päeva viimase "
+                  f"{args.max_lookback_days} päeva jooksul. See EI OLE enam "
+                  f"lihtsalt nädalavahetus — kontrolli käsitsi (sümbol valesti "
+                  f"kirjutatud? ajaloopiir? broker'i pool probleem?).")
+            continue
+
+        print(f"  ✅ {symbol}: TEGELIKULT VALIDEERITUD periood (uusimast "
+              f"vanimani): {', '.join(p.isoformat() for p in aktiivsed)}")
+        if aktiivsed[0] != naiivne_tana:
+            print(f"     ⚠️ See EI OLE sama, mis naiivne 'täna' ({naiivne_tana}) "
+                  f"— nädalavahetuse/turu-suletud tuvastus rakendus ja liikus "
+                  f"tagasi viimase päris kauplemispäevani.")
+
+        for paev in sorted(aktiivsed, reverse=True):
             n, esimene, viimane, kv = ekspordi_paev(symbol, paev, valjundi_kaust)
-            rida = {"symbol": symbol, "paev": paev.isoformat(), "ridu": n,
-                    "esimene_ts": esimene, "viimane_ts": viimane, **kv}
+            bid_ask_olemas = (n > 0 and kv.get("puuduv_bid", 0) == 0
+                              and kv.get("puuduv_ask", 0) == 0)
+            rida = {"symbol": symbol, "paev": paev.isoformat(),
+                    "naiivne_periood": f"{naiivne_eile}..{naiivne_tana}",
+                    "leitud_aktiivsete_paevade_arv": len(aktiivsed),
+                    "bid_ask_olemas": bid_ask_olemas,
+                    "ridu": n, "esimene_ts": esimene, "viimane_ts": viimane, **kv}
             kokkuvote.append(rida)
             print(f"    {paev}: {n} tick'i"
-                  + (f", spread median={kv.get('median_spread')}, "
+                  + (f", bid/ask olemas={'JAH' if bid_ask_olemas else 'OSALISELT/EI'}, "
+                     f"spread median={kv.get('median_spread')}, "
                      f"max={kv.get('max_spread')}, "
                      f"duplikaate={kv.get('duplikaat_ridu')}, "
                      f"mittemonot.={kv.get('mitte_monotoonseid_jarjestikke')}, "
                      f"0/neg spread={kv.get('null_negatiivne_spread')}"
-                     if n else " (tühi — nädalavahetus/pühad VÕI andmeid pole)"))
+                     if n else " (⚠️ ootamatult tühi — sond leidis tick'i, aga "
+                               "täiseksport mitte; teata sellest)"))
 
     kv_tee = os.path.join(valjundi_kaust, "validate24_summary.csv")
     if kokkuvote:
@@ -449,6 +521,10 @@ def main():
                         "21.09.2026) — nafta on 'WTI', mitte 'USOIL'.")
     p.add_argument("--start", help="YYYY-MM-DD (export)")
     p.add_argument("--end", help="YYYY-MM-DD (export)")
+    p.add_argument("--max-lookback-days", type=int, default=10,
+                   help="validate24: mitu päeva tagasiulatuvalt otsida "
+                        "viimast aktiivset kauplemispäeva, kui viimased 24h "
+                        "jäävad nädalavahetusele/pühale (vaikimisi 10)")
     p.add_argument("--out", default=os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "data", "mt5_ticks"))
     p.add_argument("--i-reviewed-validate24", action="store_true",
