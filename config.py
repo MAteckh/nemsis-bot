@@ -451,7 +451,13 @@ GRID_CONFIG = {
     #
     # VAIKIMISI VÄLJAS. Kasutaja peab selle ise sisse lülitama,
     # kui on VPS-il valmis testima.
-    "news_momentum_enabled":        True,   # kasutaja kinnitas 22. sept 2026 — vt KOKKUVOTE_UUDISE_MOMENTUM_*.md
+    # TAGASI VÄLJA LÜLITATUD 22. sept 2026 — vt KOKKUVOTE_UUDISE_MOMENTUM_
+    # STOP.md. Origin/main'is leiti sõltumatu, palju rangem uuring samast
+    # ideest, mis tuvastas KRIITILISE lookahead-vea täpselt selles
+    # meetodis, mida ka SEE fail kasutab (sisenemine baaris, mis katab
+    # uudise hetke — sündmused langevad kokku baari-piiridega :00/:15/
+    # :30/:45). See viga puhus tulemust ~9x selles teises uuringus.
+    "news_momentum_enabled":        False,
     "news_momentum_interval":       "1h",   # ATR arvutuseks
     "news_momentum_react_interval": "5m",   # hinna jälgimiseks sündmuse järel
     "news_momentum_window_min":     90,     # mitu minutit pärast sündmust veel "reageerimisaken"
