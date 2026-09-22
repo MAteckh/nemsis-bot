@@ -451,7 +451,7 @@ GRID_CONFIG = {
     #
     # VAIKIMISI VÄLJAS. Kasutaja peab selle ise sisse lülitama,
     # kui on VPS-il valmis testima.
-    "news_momentum_enabled":        False,
+    "news_momentum_enabled":        True,   # kasutaja kinnitas 22. sept 2026 — vt KOKKUVOTE_UUDISE_MOMENTUM_*.md
     "news_momentum_interval":       "1h",   # ATR arvutuseks
     "news_momentum_react_interval": "5m",   # hinna jälgimiseks sündmuse järel
     "news_momentum_window_min":     90,     # mitu minutit pärast sündmust veel "reageerimisaken"
