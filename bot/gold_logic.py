@@ -297,6 +297,28 @@ def update_trailing_sl(direction, entry, current_price, current_sl, atr, cfg):
         return min(current_sl, round(new_sl, 2))
 
 
+def news_reaction_signal(price_then, price_now, atr, cfg):
+    """
+    Uudise-momentum: kas hind on sündmuse hetkest (price_then) praeguseks
+    (price_now) liikunud piisavalt, et sellega kaasa minna? Puhas
+    otsustusfunktsioon, testitav ilma MT5-ta — main_v4.py annab ette
+    mõlemad hinnad ja ATR-i, see ei tee ise ühtegi võrgupäringut.
+
+    Backtest (KOKKUVOTE_UUDISE_MOMENTUM_V2.md, V7, V8): min_move_atr=0.4
+    ja sl_atr=1.5 andsid positiivse tulemuse (PF 1.79-5.11) XAUUSD H1
+    andmetel, keskmise/suure tähtsusega USD majandusuudiste järel.
+    """
+    if atr <= 0:
+        return None
+    move = price_now - price_then
+    min_move = cfg.get("min_move_atr", 0.4) * atr
+    if abs(move) < min_move:
+        return None
+    direction = "buy" if move > 0 else "sell"
+    sl_dist = cfg.get("sl_atr", 1.5) * atr
+    return direction, sl_dist
+
+
 def donchian_signal(df, lookback, atr, cfg):
     """
     Donchian väljamurre — ülekihi signaal "tuumik + ülekiht" strateegias.

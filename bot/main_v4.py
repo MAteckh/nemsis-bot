@@ -8,7 +8,7 @@ Strateegiad:
 """
 from dotenv import load_dotenv
 load_dotenv()
-import sys, os, json, time, logging, requests
+import sys, os, json, time, logging, re, requests
 from datetime import datetime, timezone
 import pandas as pd
 import numpy as np
@@ -643,7 +643,7 @@ def sync_mt5_positions():
         all_tickets = set(all_by_ticket)
 
         # Loe Supabase-st KÕIK lahti positsioonid, kõigist režiimidest.
-        sb_open = sb_select("signals", "executed=eq.false&regime=in.(grid,portfolio,core_overlay,recovered)")
+        sb_open = sb_select("signals", "executed=eq.false&regime=in.(grid,portfolio,core_overlay,news_momentum,recovered)")
         tracked_tickets = {int(p["mt5_ticket"]) for p in sb_open if p.get("mt5_ticket") is not None}
 
         closed_found = False
@@ -665,6 +665,8 @@ def sync_mt5_positions():
                     nimi = sess[10:]
                 elif sess.startswith("overlay"):
                     nimi = "Ülekiht"
+                elif sess.startswith("news_"):
+                    nimi = sess[5:].replace("_", " ")
                 else:
                     nimi = sess
                 d_ = str(pos.get("direction") or "").upper()
@@ -1114,6 +1116,205 @@ def run_portfolio(now):
             run_portfolio_leg(leg, now)
         except Exception as e:
             add_log(f"❌ Portfell {leg.get('name')}: {e}")
+
+
+# ─────────────────────────────────────────────────────────
+#  UUDISE-MOMENTUM (22. sept 2026)
+# ─────────────────────────────────────────────────────────
+# Vt config.py "news_momentum_*" plokk backtest-viidete ja
+# hoiatuste jaoks (KOKKUVOTE_UUDISE_MOMENTUM_V2/V7/V8*.md).
+# VAIKIMISI VÄLJAS — kasutaja lülitab ise sisse, kui valmis
+# VPS-il testima.
+
+def get_recent_news_events(now):
+    """
+    Otsi Supabase econ_cal'ist "valgenimekirja" sündmusi viimase
+    news_momentum_window_min minuti seest. econ_cal't laeb kasutaja
+    eraldi (vt CLAUDE.md "Andmed") — kui see pole värske, ei leia
+    see funktsioon lihtsalt midagi (fail-safe, mitte crash).
+    """
+    cfg = GRID_CONFIG
+    window_min = cfg.get("news_momentum_window_min", 90)
+    # "Z" (mitte "+00") — "+" URL query-stringis tähendaks tühikut ja
+    # lõhuks PostgREST'i ajafiltri.
+    start = (now - pd.Timedelta(minutes=window_min)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    now_str = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    rows = sb_select(
+        "econ_cal",
+        f"currency=eq.USD&importance=in.(0,1)&ts=gte.{start}&ts=lte.{now_str}&order=ts.desc"
+    )
+    if not rows:
+        return []
+    titles = set(cfg.get("news_momentum_titles", []))
+    return [r for r in rows if r.get("title") in titles]
+
+
+def run_news_momentum(now):
+    """Ava uus uudise-momentum positsioon, kui viimase akna sees on
+    valgenimekirja sündmus JA hind on sellest ajast piisavalt liikunud."""
+    cfg = GRID_CONFIG
+    if not cfg.get("news_momentum_enabled", False):
+        return
+    if now.weekday() >= 5 or gold_logic.is_news_blackout(now):
+        return
+
+    max_open = int(cfg.get("news_momentum_max_open", 1))
+    open_now = sb_select("signals", "executed=eq.false&regime=eq.news_momentum")
+    if len(open_now) >= max_open:
+        return
+
+    sym = resolve_broker_symbol(["XAUUSD"])
+    if sym is None:
+        return
+
+    events = get_recent_news_events(now)
+    if not events:
+        return
+
+    df_atr = get_data(sym, interval=cfg.get("news_momentum_interval", "1h"), outputsize=60)
+    if df_atr is None or len(df_atr) < 20:
+        return
+    atr = gold_logic.calc_atr(df_atr)
+    if atr <= 0:
+        return
+
+    df_react = get_data(sym, interval=cfg.get("news_momentum_react_interval", "5m"), outputsize=300)
+    if df_react is None or len(df_react) < 5:
+        return
+
+    price_now = get_price(sym)
+    if price_now <= 0:
+        price_now = float(df_react["close"].iloc[-1])
+
+    sig_cfg = {
+        "min_move_atr": cfg.get("news_momentum_min_move_atr", 0.4),
+        "sl_atr":        cfg.get("news_momentum_sl_atr", 1.5),
+    }
+
+    for ev in events:
+        ev_ts_raw = ev.get("ts")
+        title = ev.get("title") or "?"
+        if not ev_ts_raw:
+            continue
+        try:
+            ev_ts = pd.Timestamp(ev_ts_raw)
+            if ev_ts.tzinfo is None:
+                ev_ts = ev_ts.tz_localize("UTC")
+        except Exception:
+            continue
+
+        # Title võib sisaldada URL/query-stringi jaoks ohtlikke märke
+        # (nt "S&P Global..." — "&" lõhuks "session=eq.{session}" filtri).
+        safe_title = re.sub(r"[^A-Za-z0-9]+", "_", title).strip("_")
+        session = f"news_{safe_title}_{ev_ts.strftime('%Y-%m-%d_%H%M')}"
+        if sb_select("signals", f"session=eq.{session}&limit=1"):
+            continue  # see sündmus on juba käsitletud (võidud VÕI kaotused)
+
+        pos = df_react.index.searchsorted(ev_ts)
+        if pos >= len(df_react):
+            continue
+        price_then = float(df_react["open"].iloc[pos])
+
+        sig = gold_logic.news_reaction_signal(price_then, price_now, atr, sig_cfg)
+        if sig is None:
+            continue
+        direction, sl_dist = sig
+
+        n_legs = int(cfg.get("news_momentum_n_legs", 2))
+        risk_pct_per_leg = cfg.get("news_momentum_risk_pct_per_leg", 0.015)
+        max_lot = cfg.get("news_momentum_max_lot", 0.5)
+        balance = get_balance()
+        lot_per_leg = gold_logic.get_risk_based_lot(balance, sl_dist, 100.0, risk_pct_per_leg, max_lot=max_lot)
+        lot_total = round(lot_per_leg * n_legs, 2)
+
+        sl = price_now - sl_dist if direction == "buy" else price_now + sl_dist
+        # Lai algne TP — trailing (manage_news_momentum) juhib tegelikku
+        # väljumist, TP on ainult kaugele jäetud turvavõrk broker'i jaoks.
+        tp_dist = sl_dist * 5
+        tp = price_now + tp_dist if direction == "buy" else price_now - tp_dist
+
+        res = ct.place_order(direction, sym, lot_total, tp=round(tp, 2), sl=round(sl, 2))
+        if "error" in res:
+            add_log(f"❌ Uudise-momentum order ebaõnnestus ({title}): {res['error']}")
+            continue
+
+        ok = sb_insert("signals", {
+            "direction": direction, "entry": round(price_now, 5), "tp": round(tp, 2),
+            "sl": round(sl, 2), "lot": lot_total, "regime": "news_momentum", "session": session,
+            "executed": False, "breakeven": False, "atr": round(atr, 4), "score": 0,
+            "mt5_ticket": res.get("orderId"),
+        })
+        add_log(f"📰 Uudise-momentum {direction.upper()} @ {price_now:.4f} lot={lot_total} "
+                f"SL:{sl:.2f} ({title})")
+        send_telegram(f"📰 <b>Uudise-momentum {direction.upper()}</b>\n{title}\n"
+                       f"@ {price_now:.4f} lot={lot_total}\nSL {sl:.2f} (trailing)")
+        if not ok:
+            logger.error(f"🚨 KRIITILINE: news_momentum order {res.get('orderId')} täitus, "
+                          f"Supabase salvestus ebaõnnestus — JÄLGIMATA!")
+            send_telegram(f"🚨 <b>KRIITILINE</b>\nUudise-momentum {res.get('orderId')} täitus "
+                           f"MT5-l, aga andmebaasi ei jõudnud. Kontrolli käsitsi!")
+        return  # üks sisenemine skanni kohta piisab
+
+
+def manage_news_momentum(now):
+    """
+    Trailing stop olemasolevatele uudise-momentum positsioonidele +
+    MAX_HOLD tagavara-sulgemine. Backtestis (KOKKUVOTE_UUDISE_MOMENTUM_
+    V3_HOIATUS.md) oli see tagavara oluline: ilma selleta ei sulge
+    miski positsiooni, mis kunagi kasumisse ei jõua.
+    """
+    cfg = GRID_CONFIG
+    if not cfg.get("news_momentum_enabled", False):
+        return
+    open_pos = sb_select("signals", "executed=eq.false&regime=eq.news_momentum")
+    if not open_pos:
+        return
+
+    sym = resolve_broker_symbol(["XAUUSD"])
+    if sym is None:
+        return
+    df_atr = get_data(sym, interval=cfg.get("news_momentum_interval", "1h"), outputsize=60)
+    atr = gold_logic.calc_atr(df_atr) if df_atr is not None and len(df_atr) >= 20 else 0.0
+    price_now = get_price(sym)
+
+    max_hold_hours = cfg.get("news_momentum_max_hold_hours", 240)
+    trail_cfg = {
+        "trail_activate_atr": cfg.get("news_momentum_trail_activate_atr", 1.0),
+        "trail_distance_atr": cfg.get("news_momentum_trail_distance_atr", 1.5),
+        "trail_breakeven_buf": cfg.get("news_momentum_trail_breakeven_buf", 2.0),
+    }
+
+    for pos in open_pos:
+        ticket = pos.get("mt5_ticket")
+        if ticket is None:
+            continue
+        opened_at = pos.get("created_at")
+        if opened_at:
+            try:
+                opened_ts = pd.Timestamp(opened_at)
+                if opened_ts.tzinfo is None:
+                    opened_ts = opened_ts.tz_localize("UTC")
+                held_hours = (now - opened_ts).total_seconds() / 3600.0
+                if held_hours >= max_hold_hours:
+                    if ct.close_position(int(ticket)):
+                        add_log(f"⏱ Uudise-momentum {ticket}: MAX_HOLD tagavara ({max_hold_hours}h) — suletud")
+                    continue
+            except Exception:
+                pass
+
+        if atr <= 0 or price_now <= 0:
+            continue
+        direction = pos.get("direction", "buy")
+        entry = float(pos.get("entry", 0) or 0)
+        current_sl = float(pos.get("sl", 0) or 0)
+        if not entry or not current_sl:
+            continue
+        new_sl = gold_logic.update_trailing_sl(direction, entry, price_now, current_sl, atr, trail_cfg)
+        if round(new_sl, 2) == round(current_sl, 2):
+            continue
+        if ct.modify_position_sltp(int(ticket), sl=round(new_sl, 2)):
+            sb_upsert("signals", {"id": pos["id"], "sl": round(new_sl, 2)})
+            add_log(f"📰 Uudise-momentum {ticket}: trailing SL {current_sl:.2f} → {new_sl:.2f}")
 
 
 def run_gold_grid(price, high, low, now):
@@ -1608,6 +1809,14 @@ def main():
                     run_portfolio(now)
                 except Exception as e:
                     add_log(f"❌ Portfelli viga: {e}")
+
+            # ── UUDISE-MOMENTUM (vaikimisi väljas, vt config.py) ──
+            if GRID_CONFIG.get("news_momentum_enabled", False):
+                try:
+                    manage_news_momentum(now)
+                    run_news_momentum(now)
+                except Exception as e:
+                    add_log(f"❌ Uudise-momentum viga: {e}")
 
             # ── FOREX MEAN REVERSION ──
             for symbol, strategy in mr_strategies.items():

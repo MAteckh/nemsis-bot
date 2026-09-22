@@ -258,6 +258,43 @@ def close_position(ticket):
     return True
 
 
+def modify_position_sltp(ticket, sl=None, tp=None):
+    """
+    Muuda avatud positsiooni SL ja/või TP ilma positsiooni sulgemata —
+    vajalik trailing stopi jaoks (uudise-momentum strateegia). Varem seda
+    funktsiooni ei olnud: gold_logic.update_trailing_sl() arvutas uue
+    SL-i väärtuse, aga miski ei saatnud seda kunagi broker'ile.
+    Tagastab True edukuse korral, False vea korral.
+    """
+    if not is_connected():
+        logger.error("modify_position_sltp: MT5 pole ühendatud")
+        return False
+
+    pos = mt5.positions_get(ticket=ticket)
+    if not pos:
+        logger.warning(f"modify_position_sltp: positsioon {ticket} ei leitud MT5-s")
+        return False
+
+    p = pos[0]
+    request = {
+        "action":   mt5.TRADE_ACTION_SLTP,
+        "symbol":   p.symbol,
+        "position": ticket,
+        "sl":       float(sl) if sl is not None else p.sl,
+        "tp":       float(tp) if tp is not None else p.tp,
+        "magic":    MAGIC,
+    }
+
+    result = mt5.order_send(request)
+    if result is None or result.retcode != mt5.TRADE_RETCODE_DONE:
+        err = result.comment if result else mt5.last_error()
+        logger.error(f"modify_position_sltp ebaõnnestus ticket={ticket}: {err}")
+        return False
+
+    logger.info(f"✅ Positsioon {ticket} SL/TP muudetud -> sl={request['sl']} tp={request['tp']}")
+    return True
+
+
 def get_open_positions(symbol=None):
     """
     Tagasta kõik lahti positsioonid magic=MAGIC filtriga.

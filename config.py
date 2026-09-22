@@ -411,4 +411,90 @@ GRID_CONFIG = {
     "scalp_tp":         12.0,
     "scalp_sl":         25.0,
     "scalp_offset":      5.0,
+
+    # ── UUDISE-MOMENTUM STRATEEGIA (22. sept 2026) ──────────────
+    # Kasutaja idee: uudise (USA majandusandme) järel mine hinna
+    # liikumise SUUNAS kaasa, mitte oota valmis signaali. Testitud
+    # ulatuslikult (vt KOKKUVOTE_UUDISE_MOMENTUM_V2.md, _V7,
+    # _V8_KOMPOUNDIMINE) XAUUSD H1 andmetel, econ_cal (USD,
+    # keskmine+suur tähtsus) sündmuste peal, 2024-04..2026-09:
+    #
+    #   seade                    tulemus (2.4a, 214-250 EUR konto)
+    #   -----------------------  ---------------------------------
+    #   koik USD uudised         KAOTAB raha (PF 0.72-0.98) —
+    #     (importance kõik)      halvem kui juhuslik ajastus (V3)
+    #   ainult keskmine+suur,    +454 EUR, PF 1.79, DD -19.4% (V2)
+    #     selektiivne, 1 jalg
+    #   sama, 2 "jalga" (2x       +27 042 EUR/2.4a, PF 5.11,
+    #     risk_pct, trailing)    DD -21.0%, 1a: 7266 EUR (V7)
+    #   sama, kompoundiv          250 -> 2558 EUR/aasta,
+    #     1.5%/jalg risk         madalaim -10% (V8)
+    #
+    # TÄHTIS, MIDA TEADA ENNE SISSELÜLITAMIST:
+    #  - 5 "jalga" (kasutaja algne idee) VÕI fikseeritud lot suure
+    #    SL-lae juures LÕHKUS 250 EUR konto ESIMESE nädalaga
+    #    (KOKKUVOTE_UUDISE_MOMENTUM_V4_KRIITILINE.md) — seepärast
+    #    on siin risk_pct-põhine (kompoundiv, balance'iga vähenev)
+    #    suurus, mitte fikseeritud lot.
+    #  - Trailing SL (gold_logic.update_trailing_sl) parandab
+    #    tulemust olulisel määral (DD -21% vs -69% ilma trailinguta),
+    #    aga CLAUDE.md's on varasem hoiatus "Trailing SL kukkus
+    #    läbi kolmel sõltumatul testil" — TEISES kontekstis (kulla
+    #    grid, chop-turg). Siin (harv, uudise-järgne, selge suund)
+    #    näitas backtest edge't ka ILMA trailingita (PF 2.17),
+    #    trailing lisab turvalisust, mitte ei loo edge't kunstlikult.
+    #  - Vajab UUT broker-koodi (mt5_connector.modify_position_sltp,
+    #    lisatud 22. sept 2026) — varem sai ordereid ainult avada,
+    #    mitte avatud positsiooni SL-i muuta.
+    #  - 2.4 aasta test kattub kulla erakordse tõusuperioodiga —
+    #    edge ei ole kinnitatud rahulikumal/langevamal turul.
+    #
+    # VAIKIMISI VÄLJAS. Kasutaja peab selle ise sisse lülitama,
+    # kui on VPS-il valmis testima.
+    "news_momentum_enabled":        False,
+    "news_momentum_interval":       "1h",   # ATR arvutuseks
+    "news_momentum_react_interval": "5m",   # hinna jälgimiseks sündmuse järel
+    "news_momentum_window_min":     90,     # mitu minutit pärast sündmust veel "reageerimisaken"
+    "news_momentum_min_move_atr":   0.4,    # backtestitud lävi — vt tabel ülal
+    "news_momentum_sl_atr":         1.5,
+    "news_momentum_trail_activate_atr": 1.0,
+    "news_momentum_trail_distance_atr": 1.5,
+    "news_momentum_trail_breakeven_buf": 2.0,
+    "news_momentum_n_legs":         2,      # kombineeritud risk = n_legs x risk_pct_per_leg
+    "news_momentum_risk_pct_per_leg": 0.015,  # sama tase, mida portfolio_risk_pct mujal kasutab
+    "news_momentum_max_lot":        0.5,
+    "news_momentum_max_hold_hours": 240,    # 10 päeva tagavara-sulgemine (vt V3 aus eeldus)
+    "news_momentum_max_open":       1,      # max 1 avatud uudise-positsioon korraga
+    # Sündmuste "valgenimekiri" — ainult need econ_cal title'id (USD,
+    # importance 0 või 1), mis on backtestitud KOKKUVOTE_UUDISE_V5
+    # ja hilisemates testides. Uudiste-kvaliteedi filter on ISE testitud
+    # eraldi tähtsaks (madala tähtsusega read nagu "Imports" lõhkusid
+    # kontot sama kiiresti kui suured, aga head sündmused ei toonud
+    # üksinda tulemust — mõlemad koos on vajalikud).
+    "news_momentum_titles": [
+        # suur tähtsus (importance=1)
+        "Durable Goods Orders MoM", "ISM Manufacturing PMI", "ISM Services PMI",
+        "Personal Income MoM", "Core PCE Price Index MoM", "Personal Spending MoM",
+        "Non Farm Payrolls", "PPI MoM", "JOLTs Job Openings", "Retail Sales MoM",
+        "Building Permits Prel", "Unemployment Rate", "Michigan Consumer Sentiment Prel",
+        "Core Inflation Rate MoM", "Inflation Rate MoM", "Inflation Rate YoY",
+        "Core Inflation Rate YoY", "Existing Home Sales", "Housing Starts",
+        "FOMC Minutes", "Fed Interest Rate Decision", "Fed Press Conference",
+        "Fed Chair Powell Speech", "GDP Growth Rate QoQ Adv",
+        "GDP Growth Rate QoQ 2nd Est", "GDP Growth Rate QoQ Final",
+        "FOMC Economic Projections", "Fed Chair Powell Testimony",
+        # keskmine tähtsus (importance=0), valitud ainult päris majandusandmed
+        "Initial Jobless Claims", "PCE Price Index YoY", "PCE Price Index MoM",
+        "New Home Sales MoM", "New Home Sales", "Pending Home Sales YoY",
+        "Pending Home Sales MoM", "Core PPI MoM", "CB Consumer Confidence",
+        "Average Hourly Earnings YoY", "Average Hourly Earnings MoM",
+        "ADP Employment Change", "Existing Home Sales MoM",
+        "S&P Global Manufacturing PMI Flash", "S&P Global Services PMI Flash",
+        "S&P Global Composite PMI Flash", "Chicago PMI",
+        "Michigan Consumer Sentiment Final", "Industrial Production MoM",
+        "Building Permits MoM Prel", "NAHB Housing Market Index",
+        "Philadelphia Fed Manufacturing Index", "NY Empire State Manufacturing Index",
+        "Retail Sales Ex Autos MoM", "Chicago Fed National Activity Index",
+        "Dallas Fed Manufacturing Index",
+    ],
 }
